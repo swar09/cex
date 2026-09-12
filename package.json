@@ -1,0 +1,8 @@
+{
+  "name": "cex-monorepo",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ]
+}

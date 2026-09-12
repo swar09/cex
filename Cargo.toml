@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = [
+    "packages/db",
+    "packages/domain",
+    "packages/redis",
+]

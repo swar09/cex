@@ -1,0 +1,12 @@
+[files]
+extend-exclude = [
+    "target",
+    "node_modules",
+    "dist",
+    "pnpm-lock.yaml",
+    "package-lock.json",
+    "Cargo.lock",
+]
+
+[default.extend-words]
+cex = "cex"
