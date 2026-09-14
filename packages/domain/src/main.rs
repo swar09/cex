@@ -1,5 +1,6 @@
 use std::{
     cell::RefCell,
+    cmp::min,
     collections::{BTreeMap, HashMap, LinkedList},
     rc::Rc,
 };
@@ -79,6 +80,10 @@ impl Order {
             return;
         }
         self.remaining_quantity -= quantity;
+    }
+
+    pub fn is_filled(&self) -> bool {
+        self.get_remaining_quantity() == 0
     }
 }
 
@@ -185,30 +190,77 @@ impl OrderBook {
             },
         }
     }
-    fn match_orders(&self) -> Trades {
+    fn match_orders(&mut self) -> Trades {
         let mut trades: Trades = vec![];
         trades.reserve(self.orders.len());
 
-        while true {
+        loop {
             if self.bids.is_empty() || self.asks.is_empty() {
                 break;
             }
 
-            let (bid_price, bid) = self.bids.first_key_value().unwrap();
-            let (ask_price, ask) = self.asks.first_key_value().unwrap();
+            let bid_price = self.bids.first_key_value().unwrap().0.0;
+            let ask_price = *self.asks.first_key_value().unwrap().0;
 
-            if bid_price.0 < *ask_price {
+            if bid_price < ask_price {
                 break;
             }
 
             while !self.bids.is_empty() && !self.asks.is_empty() {
-                let (bid_price, bid) = self.bids.first_key_value().unwrap();
-                let (ask_price, ask) = self.asks.first_key_value().unwrap();
+                let (bid_filled, bid_order_id, ask_filled, ask_order_id, quantity) = {
+                    let (_, order_pointer_bid) = self.bids.first_key_value().unwrap();
+                    let (_, order_pointer_ask) = self.asks.first_key_value().unwrap();
 
-                // let quantity = bid.clone().as;
+                    let mut bid = order_pointer_bid.front().unwrap().borrow_mut();
+                    let mut ask = order_pointer_ask.front().unwrap().borrow_mut();
+
+                    let quantity = min(bid.get_remaining_quantity(), ask.get_remaining_quantity());
+
+                    bid.fill(quantity);
+                    ask.fill(quantity);
+
+                    (
+                        bid.is_filled(),
+                        bid.get_order_id(),
+                        ask.is_filled(),
+                        ask.get_order_id(),
+                        quantity,
+                    )
+                };
+
+                trades.push(Trade {
+                    bid_trade: TradeInfo {
+                        order_id: bid_order_id,
+                        price: bid_price,
+                        quantity,
+                    },
+                    ask_trade: TradeInfo {
+                        order_id: ask_order_id,
+                        price: ask_price,
+                        quantity,
+                    },
+                });
+
+                if bid_filled {
+                    self.bids.pop_first();
+                    self.orders.remove(&bid_order_id);
+                }
+
+                if ask_filled {
+                    self.asks.pop_first();
+                    self.orders.remove(&ask_order_id);
+                }
             }
         }
-        todo!()
+
+        if !self.bids.is_empty() {
+            todo!()
+        }
+        if !self.asks.is_empty() {
+            todo!()
+        }
+
+        trades
     }
     // fn () {}
 }
