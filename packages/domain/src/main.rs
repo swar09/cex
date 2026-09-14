@@ -185,11 +185,31 @@ impl OrderBook {
             },
         }
     }
-    // fn match_orders() -> Trades {
-    //     let trades: Trades;
-    //     trades.reserve(order);
-    //     todo!()
-    // }
+    fn match_orders(&self) -> Trades {
+        let mut trades: Trades = vec![];
+        trades.reserve(self.orders.len());
+
+        while true {
+            if self.bids.is_empty() || self.asks.is_empty() {
+                break;
+            }
+
+            let (bid_price, bid) = self.bids.first_key_value().unwrap();
+            let (ask_price, ask) = self.asks.first_key_value().unwrap();
+
+            if bid_price.0 < *ask_price {
+                break;
+            }
+
+            while !self.bids.is_empty() && !self.asks.is_empty() {
+                let (bid_price, bid) = self.bids.first_key_value().unwrap();
+                let (ask_price, ask) = self.asks.first_key_value().unwrap();
+
+                // let quantity = bid.clone().as;
+            }
+        }
+        todo!()
+    }
     // fn () {}
 }
 
