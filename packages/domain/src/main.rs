@@ -1,3 +1,5 @@
+use rand::{Rng, RngExt};
+use std::cmp::Reverse;
 use std::{
     cell::RefCell,
     cmp::min,
@@ -16,7 +18,7 @@ pub enum Side {
     Sell,
 }
 
-type Price = i32;
+type Price = i64;
 type Quantity = u32;
 type OrderId = u64;
 
@@ -154,7 +156,6 @@ struct OrderEntry {
     pub price: Price,
     pub side: Side,
 }
-use std::cmp::Reverse;
 
 struct OrderBook {
     bids: BTreeMap<Reverse<Price>, OrderPointers>, // higest price first
@@ -173,6 +174,7 @@ impl OrderBook {
     fn can_match(&self, side: Side, price: Price) -> bool {
         match side {
             Side::Buy => {
+                // no one is selling
                 if self.asks.is_empty() {
                     return false;
                 }
@@ -181,6 +183,7 @@ impl OrderBook {
                 price >= *best_ask.0
             },
             Side::Sell => {
+                // no one is buying
                 if self.bids.is_empty() {
                     return false;
                 }
