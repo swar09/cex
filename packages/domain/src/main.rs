@@ -11,8 +11,9 @@ use slab::Slab;
 pub enum OrderType {
     GoodTillCancel,
     FillAndKill,
+    Market,
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Side {
     Buy,
     Sell,
@@ -47,11 +48,35 @@ pub struct Order {
     order_type: OrderType,
     order_id: OrderId,
     side: Side,
-    price: Price,
+    price: Option<Price>,
     intial_quantity: Quantity,
     remaining_quantity: Quantity,
 }
 impl Order {
+    pub fn new(order_id: OrderId, side: Side, price: Price, quantity: Quantity, order_type: OrderType) -> Self {
+        Self {
+            order_type,
+            order_id,
+            side,
+            price: Some(price),
+            intial_quantity: quantity,
+            remaining_quantity: quantity,
+        }
+    }
+
+    pub fn new_market_order(order_id: OrderId, side: Side, quantity: Quantity, order_type: OrderType) -> Self {
+        let order_type = OrderType::Market;
+        let price = None;
+        Self {
+            order_type,
+            order_id,
+            side,
+            price,
+            intial_quantity: quantity,
+            remaining_quantity: quantity,
+        }
+    }
+
     pub fn get_order_id(&self) -> OrderId {
         self.order_id
     }
@@ -59,7 +84,7 @@ impl Order {
         self.side
     }
     pub fn get_price(&self) -> Price {
-        self.price
+        self.price.unwrap()
     }
     pub fn get_order_type(&self) -> OrderType {
         self.order_type
@@ -86,6 +111,10 @@ impl Order {
 
     pub fn is_filled(&self) -> bool {
         self.get_remaining_quantity() == 0
+    }
+    pub fn to_good_till_cancel(&mut self, price: Price) {
+        self.order_type = OrderType::GoodTillCancel;
+        self.price = Some(price);
     }
 }
 
@@ -152,7 +181,7 @@ impl ModifyOrder {
             order_type,
             side: self.get_side(),
             order_id: self.get_order_id(),
-            price: self.get_price(),
+            price: Some(self.get_price()),
             intial_quantity: self.get_quantity(),
             remaining_quantity: self.get_quantity(),
         };
@@ -308,6 +337,7 @@ impl OrderBook {
                     self.cancel_order(order_id);
                 },
                 OrderType::GoodTillCancel => {},
+                OrderType::Market => {},
             }
         }
 
@@ -321,6 +351,7 @@ impl OrderBook {
                     self.cancel_order(order_id);
                 },
                 OrderType::GoodTillCancel => {},
+                OrderType::Market => {},
             }
         }
 
@@ -328,14 +359,27 @@ impl OrderBook {
     }
 
     pub fn add_order(&mut self, order: OrderPointer) -> Option<Trades> {
-        let (order_type, order_id, order_side, order_price) = {
+        let (order_type, order_id, order_side, order_price, order_initial_quantity) = {
             (
                 order.borrow().get_order_type(),
                 order.borrow().get_order_id(),
                 order.borrow().get_side(),
                 order.borrow().get_price(),
+                order.borrow().get_inital_quantity(),
             )
         };
+
+        if order_type == OrderType::Market {
+            if order_side == Side::Buy && !self.asks.is_empty() {
+                let worst_ask_price = *self.asks.first_entry().unwrap().key();
+                order.borrow_mut().to_good_till_cancel(worst_ask_price);
+            } else if order_side == Side::Sell && !self.bids.is_empty() {
+                let Reverse(worst_bid_price) = *self.bids.first_entry().unwrap().key();
+                order.borrow_mut().to_good_till_cancel(worst_bid_price);
+            } else {
+                return None;
+            }
+        }
 
         if self.orders.contains_key(&order_id) {
             return None;
@@ -412,18 +456,12 @@ fn main() {}
 mod tests {
     use super::*;
 
-    fn make_order(
-        id: OrderId,
-        side: Side,
-        price: Price,
-        qty: Quantity,
-        order_type: OrderType,
-    ) -> OrderPointer {
+    fn make_order(id: OrderId, side: Side, price: Price, qty: Quantity, order_type: OrderType) -> OrderPointer {
         Rc::new(RefCell::new(Order {
             order_type,
             order_id: id,
             side,
-            price,
+            price: Some(price),
             intial_quantity: qty,
             remaining_quantity: qty,
         }))
