@@ -400,6 +400,10 @@ impl OrderBook {
         self.cancel_order(modify_order.order_id);
         return self.add_order(modify_order.to_order_pointer(order_type));
     }
+
+    pub fn len(&self) -> usize {
+        self.orders.len()
+    }
 }
 
 fn main() {}
@@ -734,5 +738,14 @@ mod tests {
         assert_eq!(trades[0].bid_trade.order_id, 2);
         assert_eq!(trades[0].bid_trade.price, 200);
         assert_eq!(trades[0].bid_trade.quantity, 20);
+    }
+
+    #[test]
+    fn test_orderbook_len() {
+        let mut book = OrderBook::new();
+        for i in 1..=10 {
+            book.add_order(gtc_buy(i, 100, 10));
+        }
+        assert_eq!(book.len(), 10);
     }
 }
