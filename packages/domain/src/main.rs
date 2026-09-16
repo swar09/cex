@@ -147,14 +147,16 @@ impl ModifyOrder {
         self.quantity
     }
 
-    pub fn to_order_pointer(&self, order_type: OrderType) -> Rc<ModifyOrder> {
-        Rc::new(ModifyOrder {
+    pub fn to_order_pointer(&self, order_type: OrderType) -> OrderPointer {
+        let order = Order {
             order_type,
-            order_id: self.get_order_id(),
             side: self.get_side(),
+            order_id: self.get_order_id(),
             price: self.get_price(),
-            quantity: self.get_quantity(),
-        })
+            intial_quantity: self.get_quantity(),
+            remaining_quantity: self.get_quantity(),
+        };
+        return Rc::new(RefCell::new(order));
     }
 }
 
@@ -387,6 +389,16 @@ impl OrderBook {
                 }
             },
         }
+    }
+
+    pub fn modify_order(&mut self, modify_order: ModifyOrder) -> Option<Trades> {
+        if !self.orders.contains_key(&modify_order.order_id) {
+            return None;
+        }
+        let exsisting_order = self.orders.get(&modify_order.order_id).unwrap();
+        let order_type = exsisting_order.order.borrow().get_order_type();
+        self.cancel_order(modify_order.order_id);
+        return self.add_order(modify_order.to_order_pointer(order_type));
     }
 }
 
@@ -703,5 +715,24 @@ mod tests {
         let level = book.bids.get(&Reverse(100)).unwrap();
         assert_eq!(level.orders.len(), 1);
         assert!(book.orders.contains_key(&2));
+    }
+
+    #[test]
+    fn test_modify_order() {
+        let mut book = OrderBook::new();
+        book.add_order(gtc_buy(1, 100, 10));
+        let modify_order = ModifyOrder {
+            order_id: 1,
+            order_type: OrderType::GoodTillCancel,
+            side: Side::Sell,
+            price: 200,
+            quantity: 20,
+        };
+        book.add_order(gtc_buy(2, 200, 20));
+        let trades = book.modify_order(modify_order).unwrap();
+        assert_eq!(trades.len(), 1);
+        assert_eq!(trades[0].bid_trade.order_id, 2);
+        assert_eq!(trades[0].bid_trade.price, 200);
+        assert_eq!(trades[0].bid_trade.quantity, 20);
     }
 }
