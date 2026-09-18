@@ -1,0 +1,9 @@
+[package]
+name = "gateway"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+cache = { version = "0.1.0", path = "../cache" }
+db = { version = "0.1.0", path = "../db" }
+tokio = "1.53.1"
