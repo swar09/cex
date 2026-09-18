@@ -415,3 +415,8 @@ dependencies = [
 [[package]]
 name = "workers"
 version = "0.1.0"
+dependencies = [
+ "chrono",
+ "domain",
+ "engine",
+]

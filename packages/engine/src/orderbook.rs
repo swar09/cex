@@ -4,8 +4,8 @@ use std::{
 };
 
 use chrono::{Local, Timelike};
-
 use domain::{
+    Quantity,
     level::PriceLevel,
     orders::{ModifyOrder, OrderIds, OrderPointer, OrderType},
     types::{OrderId, Price, Side, Trade, TradeInfo, Trades},
@@ -27,15 +27,25 @@ pub struct OrderBook {
     pub asks: BTreeMap<Price, PriceLevel>,          // lowest price first
     pub bids: BTreeMap<Reverse<Price>, PriceLevel>, // highest price first
     pub orders: HashMap<OrderId, OrderEntry>,
+    pub data: HashMap<Price, LevelData>,
+}
+
+pub struct LevelData {
+    pub quantity: Quantity,
+}
+pub enum LevelDataAction {
+    Add,
+    Remove,
+    Match,
 }
 
 impl OrderBook {
     pub fn new() -> Self {
-        let orders = HashMap::new();
         Self {
             bids: BTreeMap::new(),
             asks: BTreeMap::new(),
-            orders,
+            orders: HashMap::new(),
+            data: HashMap::new(),
         }
     }
 
@@ -164,7 +174,7 @@ impl OrderBook {
                 OrderType::Market => {},
             }
         }
-
+        // self.on_order_matched(price, quantity);
         trades
     }
 
@@ -214,13 +224,13 @@ impl OrderBook {
         self.orders.insert(
             order_id,
             OrderEntry {
-                order,
+                order: order.clone(),
                 price: order_price,
                 side: order_side,
                 slab_key,
             },
         );
-
+        self.on_order_added(order_price, order.borrow().get_inital_quantity());
         Some(self.match_orders())
     }
 
@@ -237,6 +247,7 @@ impl OrderBook {
                 if level.is_empty() {
                     self.bids.remove(&Reverse(order_entry.price));
                 }
+                // self.on_order_cancelled(price, quantity);
             },
             Side::Sell => {
                 let level = self.asks.get_mut(&order_entry.price).unwrap();
@@ -244,8 +255,10 @@ impl OrderBook {
                 if level.is_empty() {
                     self.asks.remove(&order_entry.price);
                 }
+                // self.on_order_cancelled(price, quantity);
             },
         }
+
     }
 
     pub fn modify_order(&mut self, modify_order: ModifyOrder) -> Option<Trades> {
@@ -261,29 +274,77 @@ impl OrderBook {
     pub fn len(&self) -> usize {
         self.orders.len()
     }
-
-    pub fn prune_good_for_day_orders(&mut self) {
-        loop {
-            let now = Local::now().hour(); // hrs on 24 hr clock format
-
-            let mut order_ids: OrderIds = vec![];
-            // data = Arc<Mutex<Orders>>
-            // use data to collect order_ids
-            {
-                // check current time and closing time (const 16:00 hrs)
-                // add sleep duration & duration till closing time
-                // sleep thread till closing time
-                // shutdown condition handling
-            } // scope ended Lock removed
-            {
-                // lock the mutex and collect GoodForDay orders and push in order_ids
-            } // scope ended lock removed
-            self.cancel_orders(order_ids);
+    pub fn cancel_orders(&mut self, order_ids: OrderIds) {
+        for order_id in order_ids {
+            self.cancel_order(order_id);
         }
     }
+    pub fn can_fully_fill(&self, side: Side, price: Price, mut quantity: Quantity) -> bool {
+        if !self.can_match(side, price) {
+            return false;
+        }
 
-    pub fn cancel_orders(&mut self, _orders: OrderIds) {}
-    pub fn shutdown() {}
+        let (threshold, price_level) = match side {
+            Side::Buy => {
+                let (ask_price, price_level) = self.asks.first_key_value().unwrap();
+                (ask_price, price_level)
+            },
+            Side::Sell => {
+                let (Reverse(bid_price), price_level) = self.bids.first_key_value().unwrap();
+                (bid_price, price_level)
+            },
+        };
+
+        for (level_price, level_data) in self.data.iter() {
+            if (side == Side::Buy && threshold > level_price) || (side == Side::Sell && threshold < level_price) {
+                continue;
+            }
+
+            if (side == Side::Buy && *level_price > price) || (side == Side::Sell && *level_price < price) {
+                continue;
+            }
+
+            if quantity <= level_data.quantity {
+                return true;
+            }
+
+            quantity -= level_data.quantity;
+        }
+        return false;
+    }
+    // events to maintain data
+    pub fn on_order_cancelled(&mut self, price: Price, quantity: Quantity) {
+        let Some(mut level_data) = self.data.get_mut(&price) else {
+            return;
+        };
+        level_data.quantity -= quantity;
+    }
+    pub fn on_order_matched(&mut self, price: Price, quantity: Quantity) {
+        let Some(mut level_data) = self.data.get_mut(&price) else {
+            return;
+        };
+        level_data.quantity -= quantity;
+    }
+    pub fn on_order_added(&mut self, price: Price, quantity: Quantity) {
+        let Some(mut level_data) = self.data.get_mut(&price) else {
+            return;
+        };
+        level_data.quantity += quantity;
+    }
+    pub fn update_level_data(&mut self, price: Price, quantity: Quantity, action: LevelDataAction) {
+        let Some(mut level_data) = self.data.get_mut(&price) else {
+            return;
+        };
+        match action {
+            LevelDataAction::Add => {
+                self.on_order_added(price, quantity);
+            },
+            _ => {
+                self.on_order_cancelled(price, quantity);
+            },
+        }
+    }
+    // pub fn shutdown() {}
 }
 
 impl Default for OrderBook {
@@ -296,11 +357,12 @@ impl Default for OrderBook {
 mod tests {
     use std::{cell::RefCell, rc::Rc};
 
-    use super::*;
     use domain::{
         orders::{Order, OrderType},
         types::{OrderId, Price, Quantity, Side},
     };
+
+    use super::*;
 
     fn make_order(id: OrderId, side: Side, price: Price, qty: Quantity, order_type: OrderType) -> OrderPointer {
         Rc::new(RefCell::new(Order {
