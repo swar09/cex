@@ -1,13 +1,11 @@
 use std::{
     cmp::{Reverse, min},
     collections::{BTreeMap, HashMap},
-    sync::{Arc, Mutex},
-    thread::Thread,
 };
 
 use chrono::{Local, Timelike};
 
-use crate::{
+use domain::{
     level::PriceLevel,
     orders::{ModifyOrder, OrderIds, OrderPointer, OrderType},
     types::{OrderId, Price, Side, Trade, TradeInfo, Trades},
@@ -24,12 +22,11 @@ pub struct OrderEntry {
 }
 
 pub type Orders = HashMap<OrderId, OrderEntry>;
+
 pub struct OrderBook {
     pub asks: BTreeMap<Price, PriceLevel>,          // lowest price first
-    pub bids: BTreeMap<Reverse<Price>, PriceLevel>, // higest price first
+    pub bids: BTreeMap<Reverse<Price>, PriceLevel>, // highest price first
     pub orders: HashMap<OrderId, OrderEntry>,
-    // pub thread : Thread,
-    // pub data: Arc<Mutex<Orders>>,
 }
 
 impl OrderBook {
@@ -41,6 +38,7 @@ impl OrderBook {
             orders,
         }
     }
+
     pub fn can_match(&self, side: Side, price: Price) -> bool {
         match side {
             Side::Buy => {
@@ -63,6 +61,7 @@ impl OrderBook {
             },
         }
     }
+
     pub fn match_orders(&mut self) -> Trades {
         let mut trades: Trades = vec![];
         trades.reserve(self.orders.len());
@@ -198,6 +197,7 @@ impl OrderBook {
         if order_type == OrderType::FillAndKill && !self.can_match(order_side, order_price) {
             return None;
         }
+
         let slab_key = match order_side {
             Side::Buy => self
                 .bids
@@ -223,25 +223,26 @@ impl OrderBook {
 
         Some(self.match_orders())
     }
+
     pub fn cancel_order(&mut self, order_id: OrderId) {
-        // rename top cancel order internal
-        let Some(entry) = self.orders.remove(&order_id) else {
+        // rename to cancel_order_internal
+        let Some(order_entry) = self.orders.remove(&order_id) else {
             return;
         };
 
-        match entry.side {
+        match order_entry.side {
             Side::Buy => {
-                let level = self.bids.get_mut(&Reverse(entry.price)).unwrap();
-                level.remove(entry.slab_key);
+                let level = self.bids.get_mut(&Reverse(order_entry.price)).unwrap();
+                level.remove(order_entry.slab_key);
                 if level.is_empty() {
-                    self.bids.remove(&Reverse(entry.price));
+                    self.bids.remove(&Reverse(order_entry.price));
                 }
             },
             Side::Sell => {
-                let level = self.asks.get_mut(&entry.price).unwrap();
-                level.remove(entry.slab_key);
+                let level = self.asks.get_mut(&order_entry.price).unwrap();
+                level.remove(order_entry.slab_key);
                 if level.is_empty() {
-                    self.asks.remove(&entry.price);
+                    self.asks.remove(&order_entry.price);
                 }
             },
         }
@@ -251,8 +252,8 @@ impl OrderBook {
         if !self.orders.contains_key(&modify_order.order_id) {
             return None;
         }
-        let exsisting_order = self.orders.get(&modify_order.order_id).unwrap();
-        let order_type = exsisting_order.order.borrow().get_order_type();
+        let existing_order_entry = self.orders.get(&modify_order.order_id).unwrap();
+        let order_type = existing_order_entry.order.borrow().get_order_type();
         self.cancel_order(modify_order.order_id);
         self.add_order(modify_order.to_order_pointer(order_type))
     }
@@ -260,27 +261,28 @@ impl OrderBook {
     pub fn len(&self) -> usize {
         self.orders.len()
     }
+
     pub fn prune_good_for_day_orders(&mut self) {
         loop {
-            let now = Local::now().hour(); // hrs on 24 hr clock format 
+            let now = Local::now().hour(); // hrs on 24 hr clock format
 
             let mut order_ids: OrderIds = vec![];
-            // data = Arc<Mutex<Orders>> 
-            // use data to collect order_ids 
+            // data = Arc<Mutex<Orders>>
+            // use data to collect order_ids
             {
-                // check current time and closing time (cosnt 16:00 hrs)
-                // add sleep duration & duration till closing time 
+                // check current time and closing time (const 16:00 hrs)
+                // add sleep duration & duration till closing time
                 // sleep thread till closing time
                 // shutdown condition handling
-            } // scope ended Lock removed 
+            } // scope ended Lock removed
             {
                 // lock the mutex and collect GoodForDay orders and push in order_ids
-            } // scope ended lock removed 
+            } // scope ended lock removed
             self.cancel_orders(order_ids);
         }
     }
 
-    pub fn cancel_orders(&mut self, orders: OrderIds) {}
+    pub fn cancel_orders(&mut self, _orders: OrderIds) {}
     pub fn shutdown() {}
 }
 
@@ -295,7 +297,7 @@ mod tests {
     use std::{cell::RefCell, rc::Rc};
 
     use super::*;
-    use crate::{
+    use domain::{
         orders::{Order, OrderType},
         types::{OrderId, Price, Quantity, Side},
     };
@@ -512,7 +514,7 @@ mod tests {
 
         let trades = book.add_order(gtc_sell(3, 90, 10)).unwrap();
         assert_eq!(trades[0].bid_trade.order_id, 2); // highest bid matched
-        assert_eq!(trades[0].bid_trade.price, 100); // higest bid price
+        assert_eq!(trades[0].bid_trade.price, 100); // highest bid price
         assert!(book.orders.contains_key(&1)); // lower bid still alive
     }
 

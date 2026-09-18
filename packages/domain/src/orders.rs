@@ -1,12 +1,8 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
-use crate::{
-    OrderEntry,
-    types::{OrderId, Price, Quantity, Side},
-};
+use crate::types::{OrderId, Price, Quantity, Side};
 
 pub type OrderIds = Vec<OrderId>;
-pub type Orders = HashMap<OrderId, OrderEntry>;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum OrderType {

@@ -1,7 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
+    "bin/server",
     "packages/db",
     "packages/domain",
+    "packages/engine",
+    "packages/logger",
     "packages/redis",
+    "packages/workers",
 ]
