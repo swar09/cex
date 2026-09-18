@@ -3,7 +3,6 @@ use std::{
     collections::{BTreeMap, HashMap},
 };
 
-use chrono::{Local, Timelike};
 use domain::{
     Quantity,
     level::PriceLevel,
@@ -109,6 +108,8 @@ impl OrderBook {
                         quantity,
                     )
                 };
+                self.on_order_matched(bid_price, quantity);
+                self.on_order_matched(ask_price, quantity);
 
                 trades.push(Trade {
                     bid_trade: TradeInfo {
@@ -128,6 +129,7 @@ impl OrderBook {
                     level.pop_front();
                     if level.is_empty() {
                         self.bids.pop_first();
+                        self.data.remove(&bid_price);
                     }
                     self.orders.remove(&bid_order_id);
                 }
@@ -137,6 +139,7 @@ impl OrderBook {
                     level.pop_front();
                     if level.is_empty() {
                         self.asks.pop_first();
+                        self.data.remove(&ask_price);
                     }
                     self.orders.remove(&ask_order_id);
                 }
@@ -174,7 +177,6 @@ impl OrderBook {
                 OrderType::Market => {},
             }
         }
-        // self.on_order_matched(price, quantity);
         trades
     }
 
@@ -212,14 +214,15 @@ impl OrderBook {
             Side::Buy => self
                 .bids
                 .entry(Reverse(order_price))
-                .or_insert_with(PriceLevel::new)
+                .or_default()
                 .insert(order.clone()),
             Side::Sell => self
                 .asks
                 .entry(order_price)
-                .or_insert_with(PriceLevel::new)
+                .or_default()
                 .insert(order.clone()),
         };
+        self.data.entry(order_price).or_insert(LevelData { quantity: 0 });
 
         self.orders.insert(
             order_id,
@@ -239,6 +242,7 @@ impl OrderBook {
         let Some(order_entry) = self.orders.remove(&order_id) else {
             return;
         };
+        let remaining_quantity = order_entry.order.borrow().get_remaining_quantity();
 
         match order_entry.side {
             Side::Buy => {
@@ -246,19 +250,20 @@ impl OrderBook {
                 level.remove(order_entry.slab_key);
                 if level.is_empty() {
                     self.bids.remove(&Reverse(order_entry.price));
+                    self.data.remove(&order_entry.price);
                 }
-                // self.on_order_cancelled(price, quantity);
+                self.on_order_cancelled(order_entry.price, remaining_quantity);
             },
             Side::Sell => {
                 let level = self.asks.get_mut(&order_entry.price).unwrap();
                 level.remove(order_entry.slab_key);
                 if level.is_empty() {
                     self.asks.remove(&order_entry.price);
+                    self.data.remove(&order_entry.price);
                 }
-                // self.on_order_cancelled(price, quantity);
+                self.on_order_cancelled(order_entry.price, remaining_quantity);
             },
         }
-
     }
 
     pub fn modify_order(&mut self, modify_order: ModifyOrder) -> Option<Trades> {
@@ -284,7 +289,7 @@ impl OrderBook {
             return false;
         }
 
-        let (threshold, price_level) = match side {
+        let (threshold, _price_level) = match side {
             Side::Buy => {
                 let (ask_price, price_level) = self.asks.first_key_value().unwrap();
                 (ask_price, price_level)
@@ -310,29 +315,29 @@ impl OrderBook {
 
             quantity -= level_data.quantity;
         }
-        return false;
+        false
     }
     // events to maintain data
     pub fn on_order_cancelled(&mut self, price: Price, quantity: Quantity) {
-        let Some(mut level_data) = self.data.get_mut(&price) else {
+        let Some(level_data) = self.data.get_mut(&price) else {
             return;
         };
         level_data.quantity -= quantity;
     }
     pub fn on_order_matched(&mut self, price: Price, quantity: Quantity) {
-        let Some(mut level_data) = self.data.get_mut(&price) else {
+        let Some(level_data) = self.data.get_mut(&price) else {
             return;
         };
         level_data.quantity -= quantity;
     }
     pub fn on_order_added(&mut self, price: Price, quantity: Quantity) {
-        let Some(mut level_data) = self.data.get_mut(&price) else {
+        let Some(level_data) = self.data.get_mut(&price) else {
             return;
         };
         level_data.quantity += quantity;
     }
     pub fn update_level_data(&mut self, price: Price, quantity: Quantity, action: LevelDataAction) {
-        let Some(mut level_data) = self.data.get_mut(&price) else {
+        let Some(_level_data) = self.data.get_mut(&price) else {
             return;
         };
         match action {
@@ -693,5 +698,91 @@ mod tests {
             book.add_order(gtc_buy(i, 100, 10));
         }
         assert_eq!(book.len(), 10);
+    }
+    #[test]
+    fn test_can_fully_fill_true_when_enough_resting_liquidity() {
+        let mut book = OrderBook::new();
+        book.add_order(gtc_sell(1, 100, 10));
+        book.add_order(gtc_sell(2, 100, 5)); // total resting at 100 = 15
+
+        // a buy of 15 at price 100 should be fully fillable
+        assert!(book.can_fully_fill(Side::Buy, 100, 15));
+    }
+
+    #[test]
+    fn test_can_fully_fill_false_when_not_enough_liquidity() {
+        let mut book = OrderBook::new();
+        book.add_order(gtc_sell(1, 100, 5));
+
+        // asking to fill more than what's resting should fail
+        assert!(!book.can_fully_fill(Side::Buy, 100, 10));
+    }
+
+    #[test]
+    fn test_can_fully_fill_false_after_liquidity_consumed_by_match() {
+        let mut book = OrderBook::new();
+        book.add_order(gtc_sell(1, 100, 10));
+
+        // consume all resting liquidity via a match
+        book.add_order(gtc_buy(2, 100, 10));
+
+        // nothing left resting at 100, so a fresh buy shouldn't be fully fillable
+        assert!(!book.can_fully_fill(Side::Buy, 100, 1));
+    }
+
+    #[test]
+    fn test_can_fully_fill_reflects_partial_fill_remainder() {
+        let mut book = OrderBook::new();
+        book.add_order(gtc_sell(1, 100, 10));
+
+        // partially match away 4, leaving 6 resting
+        book.add_order(gtc_buy(2, 100, 4));
+
+        assert!(book.can_fully_fill(Side::Buy, 100, 6)); // exactly what remains
+        assert!(!book.can_fully_fill(Side::Buy, 100, 7)); // more than what remains
+    }
+
+    #[test]
+    fn test_can_fully_fill_false_after_cancel_removes_liquidity() {
+        let mut book = OrderBook::new();
+        book.add_order(gtc_sell(1, 100, 10));
+        book.add_order(gtc_sell(2, 100, 10)); // 20 resting total
+
+        book.cancel_order(1); // cancel half the liquidity
+
+        assert!(book.can_fully_fill(Side::Buy, 100, 10)); // remaining order covers it
+        assert!(!book.can_fully_fill(Side::Buy, 100, 15)); // cancelled qty no longer counted
+    }
+
+    #[test]
+    fn test_can_fully_fill_false_after_all_orders_cancelled() {
+        let mut book = OrderBook::new();
+        book.add_order(gtc_sell(1, 100, 10));
+        book.cancel_order(1);
+
+        // level is gone entirely, nothing to fill against
+        assert!(!book.can_fully_fill(Side::Buy, 100, 1));
+    }
+
+    #[test]
+    fn test_can_fully_fill_accounts_for_multiple_price_levels_walked_through() {
+        let mut book = OrderBook::new();
+        book.add_order(gtc_sell(1, 100, 5));
+        book.add_order(gtc_sell(2, 101, 5));
+
+        // buying 10 with a limit of 101 should walk through both levels
+        assert!(book.can_fully_fill(Side::Buy, 101, 10));
+        // but asking for more than total available across eligible levels should fail
+        assert!(!book.can_fully_fill(Side::Buy, 101, 11));
+    }
+
+    #[test]
+    fn test_can_fully_fill_sell_side_uses_bid_liquidity() {
+        let mut book = OrderBook::new();
+        book.add_order(gtc_buy(1, 100, 10));
+        book.add_order(gtc_buy(2, 100, 5)); // 15 resting bid liquidity
+
+        assert!(book.can_fully_fill(Side::Sell, 100, 15));
+        assert!(!book.can_fully_fill(Side::Sell, 100, 16));
     }
 }
