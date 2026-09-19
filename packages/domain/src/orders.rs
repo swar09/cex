@@ -25,6 +25,15 @@ pub struct Order {
     pub remaining_quantity: Quantity,
 }
 
+#[derive(Debug)]
+pub struct NewOrder {
+    pub order_type: OrderType,
+    pub order_id: OrderId,
+    pub side: Side,
+    pub price: Option<Price>,
+    pub quantity: Quantity,
+}
+
 impl Order {
     pub fn new(order_id: OrderId, side: Side, price: Price, quantity: Quantity, order_type: OrderType) -> Self {
         Self {

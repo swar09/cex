@@ -31,4 +31,3 @@ impl Trade {
 }
 
 pub type Trades = Vec<Trade>;
-

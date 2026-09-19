@@ -1,8 +1,9 @@
 pub mod error;
 pub mod level;
 pub mod orders;
+pub mod symbol;
 pub mod types;
-
 pub use level::*;
 pub use orders::*;
+pub use symbol::*;
 pub use types::*;

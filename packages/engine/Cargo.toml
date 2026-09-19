@@ -7,3 +7,4 @@ edition = "2024"
 domain = { path = "../domain" }
 chrono = "0.4.45"
 thiserror = "2.0.20"
+crossbeam = "0.8.5"

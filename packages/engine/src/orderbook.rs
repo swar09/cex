@@ -1,10 +1,12 @@
 use std::{
+    cell::RefCell,
     cmp::{Reverse, min},
     collections::{BTreeMap, HashMap},
+    rc::Rc,
 };
 
 use domain::{
-    Quantity,
+    NewOrder, Order, Quantity,
     level::PriceLevel,
     orders::{ModifyOrder, OrderIds, OrderPointer, OrderType},
     types::{OrderId, Price, Side, Trade, TradeInfo, Trades},
@@ -49,6 +51,7 @@ impl OrderBook {
             asks: BTreeMap::new(),
             orders: HashMap::new(),
             data: HashMap::new(),
+            // sender: s,
         }
     }
 
@@ -198,6 +201,18 @@ impl OrderBook {
             }
         }
         trades
+    }
+
+    pub fn add_new_order(&mut self, order: NewOrder) -> Option<Trades> {
+        let order_pointer = Rc::new(RefCell::new(Order {
+            order_type: order.order_type,
+            order_id: order.order_id,
+            side: order.side,
+            price: order.price,
+            intial_quantity: order.quantity,
+            remaining_quantity: order.quantity,
+        }));
+        self.add_order(order_pointer)
     }
 
     pub fn add_order(&mut self, order: OrderPointer) -> Option<Trades> {

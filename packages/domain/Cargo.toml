@@ -6,5 +6,6 @@ edition = "2024"
 [dependencies]
 chrono = "0.4.45"
 rand = "0.10.2"
+serde = { version = "1.0.229", features = ["derive"] }
 slab = "0.4.12"
 thiserror = "2.0.20"
