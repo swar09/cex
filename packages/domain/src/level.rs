@@ -20,10 +20,10 @@ pub struct OrderBookLeveInfos {
 }
 
 impl OrderBookLeveInfos {
-    pub fn getBids(&self) -> &LevelInfos {
+    pub fn get_bids(&self) -> &LevelInfos {
         &self.bids
     }
-    pub fn getAsks(&self) -> &LevelInfos {
+    pub fn get_asks(&self) -> &LevelInfos {
         &self.asks
     }
 }
