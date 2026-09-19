@@ -1,6 +1,8 @@
+use domain::{OrderId, Price, Quantity};
+
 #[derive(Clone, Copy)]
 pub enum OrderBookEvents {
-    OrderMatched(), // orderid or orderpointer ?
+    OrderMatched(OrderId, Price, Quantity), // orderid or orderpointer ?
     OrderCancelled(),
     OrderAdded(),
     OrderModified(),
