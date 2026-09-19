@@ -13,6 +13,10 @@ use domain::{
 const START: u32 = 9;
 const END: u32 = 16;
 
+// use expect("Document why this is a bug") use this to handle most safe unwrap.
+// this will trigger a loud panic but its intentional
+// use thiserror
+
 pub struct OrderEntry {
     pub order: OrderPointer,
     pub price: Price,
@@ -67,7 +71,7 @@ impl OrderBook {
                     return false;
                 }
 
-                let best_ask = self.asks.first_key_value().unwrap();
+                let best_ask = self.asks.first_key_value().expect("asks empty checked above");
                 price >= *best_ask.0
             },
             Side::Sell => {
@@ -76,7 +80,7 @@ impl OrderBook {
                     return false;
                 }
 
-                let (best_bid_price, _) = self.bids.first_key_value().unwrap();
+                let (best_bid_price, _) = self.bids.first_key_value().expect("bids empty check above");
                 price <= best_bid_price.0
             },
         }
@@ -90,8 +94,8 @@ impl OrderBook {
                 break;
             }
 
-            let bid_price = self.bids.first_key_value().unwrap().0.0;
-            let ask_price = *self.asks.first_key_value().unwrap().0;
+            let bid_price = self.bids.first_key_value().expect("bids empty check above").0.0;
+            let ask_price = *self.asks.first_key_value().expect("asks empty check above").0;
 
             if bid_price < ask_price {
                 break;
@@ -99,11 +103,11 @@ impl OrderBook {
 
             while !self.bids.is_empty() && !self.asks.is_empty() {
                 let (bid_filled, bid_order_id, ask_filled, ask_order_id, quantity) = {
-                    let (_, bid_level) = self.bids.first_key_value().unwrap();
-                    let (_, ask_level) = self.asks.first_key_value().unwrap();
+                    let (_, bid_level) = self.bids.first_key_value().expect("bids empty check above");
+                    let (_, ask_level) = self.asks.first_key_value().expect("asks empty check above");
 
-                    let mut bid = bid_level.front().unwrap().borrow_mut();
-                    let mut ask = ask_level.front().unwrap().borrow_mut();
+                    let mut bid = bid_level.front().expect("can not get order_pointer").borrow_mut();
+                    let mut ask = ask_level.front().expect("can not get order_pointer").borrow_mut();
 
                     let quantity = min(bid.get_remaining_quantity(), ask.get_remaining_quantity());
 
@@ -135,7 +139,7 @@ impl OrderBook {
                 });
 
                 if bid_filled {
-                    let level = self.bids.first_entry().unwrap().into_mut();
+                    let level = self.bids.first_entry().expect("bids empty check above").into_mut();
                     level.pop_front();
                     if level.is_empty() {
                         self.bids.pop_first();
@@ -148,7 +152,7 @@ impl OrderBook {
                 }
 
                 if ask_filled {
-                    let level = self.asks.first_entry().unwrap().into_mut();
+                    let level = self.asks.first_entry().expect("asks empty check above").into_mut();
                     level.pop_front();
                     if level.is_empty() {
                         self.asks.pop_first();
@@ -163,8 +167,8 @@ impl OrderBook {
         }
 
         if !self.bids.is_empty() {
-            let (_, bid_level) = self.bids.first_key_value().unwrap();
-            let order = bid_level.front().unwrap().borrow();
+            let (_, bid_level) = self.bids.first_key_value().expect("bids empty check above");
+            let order = bid_level.front().expect("can not get order_pointer").borrow();
             match order.get_order_type() {
                 OrderType::FillAndKill => {
                     let order_id = order.get_order_id();
@@ -179,8 +183,8 @@ impl OrderBook {
         }
 
         if !self.asks.is_empty() {
-            let (_, ask_level) = self.asks.first_key_value().unwrap();
-            let order = ask_level.front().unwrap().borrow();
+            let (_, ask_level) = self.asks.first_key_value().expect("asks empty check above");
+            let order = ask_level.front().expect("can not get order_pointer").borrow();
             match order.get_order_type() {
                 OrderType::FillAndKill => {
                     let order_id = order.get_order_id();
@@ -209,10 +213,10 @@ impl OrderBook {
 
         if order_type == OrderType::Market {
             if order_side == Side::Buy && !self.asks.is_empty() {
-                let worst_ask_price = *self.asks.first_entry().unwrap().key();
+                let worst_ask_price = *self.asks.first_entry().expect("asks not empty check above").key();
                 order.borrow_mut().to_good_till_cancel(worst_ask_price);
             } else if order_side == Side::Sell && !self.bids.is_empty() {
-                let Reverse(worst_bid_price) = *self.bids.first_entry().unwrap().key();
+                let Reverse(worst_bid_price) = *self.bids.first_entry().expect("bids not empty check above").key();
                 order.borrow_mut().to_good_till_cancel(worst_bid_price);
             } else {
                 return None;
@@ -246,7 +250,6 @@ impl OrderBook {
     }
 
     pub fn cancel_order(&mut self, order_id: OrderId) {
-        // rename to cancel_order_internal
         let Some(order_entry) = self.orders.remove(&order_id) else {
             return;
         };
@@ -254,7 +257,7 @@ impl OrderBook {
 
         match order_entry.side {
             Side::Buy => {
-                let level = self.bids.get_mut(&Reverse(order_entry.price)).unwrap();
+                let level = self.bids.get_mut(&Reverse(order_entry.price)).unwrap(); // price level error
                 level.remove(order_entry.slab_key);
                 if level.is_empty() {
                     self.bids.remove(&Reverse(order_entry.price));
@@ -263,7 +266,7 @@ impl OrderBook {
                 self.on_order_cancelled(order_entry.price, remaining_quantity);
             },
             Side::Sell => {
-                let level = self.asks.get_mut(&order_entry.price).unwrap();
+                let level = self.asks.get_mut(&order_entry.price).unwrap(); // price level error
                 level.remove(order_entry.slab_key);
                 if level.is_empty() {
                     self.asks.remove(&order_entry.price);
@@ -278,7 +281,7 @@ impl OrderBook {
         if !self.orders.contains_key(&modify_order.order_id) {
             return None;
         }
-        let existing_order_entry = self.orders.get(&modify_order.order_id).unwrap();
+        let existing_order_entry = self.orders.get(&modify_order.order_id).unwrap(); // order entry error 
         let order_type = existing_order_entry.order.borrow().get_order_type();
         self.cancel_order(modify_order.order_id);
         self.add_order(modify_order.to_order_pointer(order_type))
@@ -295,11 +298,12 @@ impl OrderBook {
         }
         let (threshold, _price_level) = match side {
             Side::Buy => {
-                let (ask_price, price_level) = self.asks.first_key_value().unwrap();
+                let (ask_price, price_level) = self.asks.first_key_value().expect("asks not empty check above");
                 (ask_price, price_level)
             },
             Side::Sell => {
-                let (Reverse(bid_price), price_level) = self.bids.first_key_value().unwrap();
+                let (Reverse(bid_price), price_level) =
+                    self.bids.first_key_value().expect("bids not empty check above");
                 (bid_price, price_level)
             },
         };
