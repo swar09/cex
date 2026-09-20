@@ -100,7 +100,7 @@ impl Order {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct ModifyOrder {
     pub order_type: OrderType,
     pub order_id: OrderId,

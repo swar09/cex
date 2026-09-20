@@ -8,3 +8,4 @@ domain = { path = "../domain" }
 chrono = "0.4.45"
 thiserror = "2.0.20"
 crossbeam = "0.8.5"
+core_affinity = "0.8.3"

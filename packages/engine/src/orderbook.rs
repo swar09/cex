@@ -279,7 +279,7 @@ impl OrderBook {
                     self.data.remove(&order_entry.price);
                 }
                 self.on_order_cancelled(order_entry.price, remaining_quantity);
-                return true;
+                true
             },
             Side::Sell => {
                 let level = self.asks.get_mut(&order_entry.price).unwrap(); // price level error
@@ -289,7 +289,7 @@ impl OrderBook {
                     self.data.remove(&order_entry.price);
                 }
                 self.on_order_cancelled(order_entry.price, remaining_quantity);
-                return true;
+                true
             },
         }
     }

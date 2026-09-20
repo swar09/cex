@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Copy, Clone, Serialize, Deserialize, PartialEq, Hash, Eq)]
+#[derive(Copy, Clone, Serialize, Deserialize, PartialEq, Hash, Eq, Debug)]
 pub enum Symbol {
     // INR Markets
     #[serde(rename = "USDT-INR")]
@@ -36,6 +36,20 @@ pub enum Symbol {
 }
 
 impl Symbol {
+    pub const ALL: [Symbol; 12] = [
+        Symbol::BnbUsdt,
+        Symbol::BtcInr,
+        Symbol::BtcUsdc,
+        Symbol::BtcUsdt,
+        Symbol::EthInr,
+        Symbol::EthUsdc,
+        Symbol::EthUsdt,
+        Symbol::InrUsdt,
+        Symbol::SolInr,
+        Symbol::SolUsdt,
+        Symbol::UsdtInr,
+        Symbol::XrpUsdt,
+    ];
     pub fn as_str(&self) -> &'static str {
         match self {
             Symbol::BnbUsdt => "BNB-USDT",
