@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crossbeam::channel::Sender;
-use domain::{Currency, Symbol, Trades};
+use domain::{Symbol, Trades};
 
 use crate::{commands::ExchangeCommand, events::OrderBookEvents, orderbook::OrderBook};
 
@@ -27,38 +27,6 @@ impl Exchange {
         self.orderbooks.insert(symbol, orderbook);
     }
 
-    pub fn get_quantity_unit(&self, symbol: Symbol) -> Currency {
-        match symbol {
-            Symbol::BnbUsdt => Currency::Bnb,
-            Symbol::BtcInr => Currency::Btc,
-            Symbol::BtcUsdc => Currency::Btc,
-            Symbol::BtcUsdt => Currency::Btc,
-            Symbol::EthInr => Currency::Eth,
-            Symbol::EthUsdc => Currency::Eth,
-            Symbol::EthUsdt => Currency::Eth,
-            Symbol::InrUsdt => Currency::Inr,
-            Symbol::SolInr => Currency::Sol,
-            Symbol::SolUsdt => Currency::Sol,
-            Symbol::UsdtInr => Currency::Usdt,
-            Symbol::XrpUsdt => Currency::Xrp,
-        }
-    }
-    pub fn get_price_unit(&self, symbol: Symbol) -> Currency {
-        match symbol {
-            Symbol::BnbUsdt => Currency::Usdt,
-            Symbol::BtcInr => Currency::Inr,
-            Symbol::BtcUsdc => Currency::Usdc,
-            Symbol::BtcUsdt => Currency::Usdt,
-            Symbol::EthInr => Currency::Inr,
-            Symbol::EthUsdc => Currency::Usdc,
-            Symbol::EthUsdt => Currency::Usdt,
-            Symbol::InrUsdt => Currency::Usdt,
-            Symbol::SolInr => Currency::Inr,
-            Symbol::SolUsdt => Currency::Usdt,
-            Symbol::UsdtInr => Currency::Inr,
-            Symbol::XrpUsdt => Currency::Usdt,
-        }
-    }
     pub fn handle_cmd(&mut self, cmd: ExchangeCommand) {
         match cmd {
             ExchangeCommand::AddNewOrder(symbol, new_order) => {
