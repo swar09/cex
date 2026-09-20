@@ -1,10 +1,12 @@
-use domain::{ModifyOrder, NewOrder, OrderId, Symbol};
+use domain::{ModifyOrder, NewOrder, OrderId, OrderType, Symbol};
 
 pub enum ExchangeCommand {
     AddNewOrder(Symbol, NewOrder),
     CancelOrder(Symbol, OrderId),
     ModifyOrder(Symbol, ModifyOrder),
-    // TODO : add new commands and write tests for all
+    PruneExpiredOrders(Symbol, OrderType),
+    /* prune good for day :)
+     * TODO : add new commands and write tests for all */
 }
 
 impl ExchangeCommand {

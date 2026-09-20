@@ -1,6 +1,6 @@
-use domain::{ModifyOrder, OrderId, Price, Quantity, Symbol};
+use domain::{ModifyOrder, OrderId, OrderIds, Price, Quantity, Symbol};
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum OrderBookEvents {
     OrderMatched(Symbol, OrderId, Price, Quantity), // orderid or orderpointer ?
     OrderCancelled(Symbol, OrderId),
@@ -9,7 +9,7 @@ pub enum OrderBookEvents {
     OrderRejected(Symbol, OrderId),
     ModifyOrderRejected(Symbol, ModifyOrder),
     // TODO : How to handle this events
-    OrderExpired(Symbol),
+    OrdersExpired(Symbol, OrderIds),
     OrderPartiallyFilled(Symbol),
     MarketOpened(Symbol),
     MarketClosed(Symbol),

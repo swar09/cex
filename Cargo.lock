@@ -1025,6 +1025,7 @@ name = "workers"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "crossbeam",
  "domain",
  "engine",
 ]

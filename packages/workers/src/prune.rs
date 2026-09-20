@@ -1,28 +1,46 @@
-use std::sync::{Arc, Mutex};
+use std::{thread, time::Duration};
 
-use chrono::{Local, Timelike};
-use domain::{OrderIds, OrderType};
-use engine::orderbook::OrderBook;
+use chrono::{Duration as ChronoDuration, Utc};
+use crossbeam::channel::Sender;
+use domain::{OrderType, Symbol};
+use engine::commands::ExchangeCommand;
 
-pub fn prune_good_for_day_orders(orderbook: Arc<Mutex<OrderBook>>) {
-    loop {
-        let _now = Local::now().hour(); // hrs on 24 hr clock format
+pub fn spawn_gfd_prune_worker(
+    cmd_tx: Sender<ExchangeCommand>,
+    symbol: Symbol,
+    utc_end_hr: u32,
+) -> thread::JoinHandle<()> {
+    thread::Builder::new()
+        .name(format!("gfd-pruner-{:?}", symbol))
+        .spawn(move || {
+            loop {
+                let now = Utc::now();
 
-        let mut order_ids: OrderIds = vec![];
+                let target_today = now
+                    .date_naive()
+                    .and_hms_opt(utc_end_hr, 0, 0)
+                    .map(|naive| naive.and_utc());
 
-        {
-            let orderbook_gaurd = orderbook.lock().unwrap();
+                let next_run = match target_today {
+                    Some(target) if target > now => target,
+                    Some(target) => target + ChronoDuration::days(1),
+                    None => {
+                        eprintln!("[Pruner] Invalid UTC hour: {}", utc_end_hr);
+                        return;
+                    },
+                };
 
-            for order_entry in orderbook_gaurd.orders.values() {
-                let order_type = order_entry.order.borrow().get_order_type();
-                if order_type != OrderType::GoodForDay {
-                    continue;
+                if let Ok(std_duration) = (next_run - now).to_std() {
+                    thread::sleep(std_duration + Duration::from_millis(50));
                 }
-                let order_id = order_entry.order.borrow().get_order_id();
-                order_ids.push(order_id);
-            }
-        }
 
-        orderbook.lock().unwrap().cancel_orders(order_ids);
-    }
+                let cmd = ExchangeCommand::PruneExpiredOrders(symbol, OrderType::GoodForDay);
+
+                if let Err(e) = cmd_tx.send(cmd) {
+                    eprintln!("[Pruner] Engine receiver dropped, stopping worker: {e}");
+                    break;
+                }
+            }
+        })
+        .expect("failed to spawn GFD pruning worker")
 }

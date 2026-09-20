@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crossbeam::channel::Sender;
-use domain::{Symbol, Trades};
+use domain::{OrderIds, Symbol, Trades};
 
 use crate::{commands::ExchangeCommand, events::OrderBookEvents, orderbook::OrderBook};
 
@@ -70,6 +70,26 @@ impl Exchange {
                             .unwrap();
                     },
                 };
+            },
+            ExchangeCommand::PruneExpiredOrders(symbol, prune_order_type) => {
+                let book = self.orderbooks.get_mut(&symbol).unwrap();
+                let mut order_ids: OrderIds = vec![];
+                for order_entry in book.orders.values() {
+                    let (order_id, order_type) = {
+                        (
+                            order_entry.order.borrow().order_id,
+                            order_entry.order.borrow().get_order_type(),
+                        )
+                    };
+                    if order_type != prune_order_type {
+                        continue;
+                    }
+                    order_ids.push(order_id);
+                }
+                book.cancel_orders(order_ids.clone());
+                self.event_tx
+                    .try_send(OrderBookEvents::OrdersExpired(symbol, order_ids))
+                    .unwrap();
             },
         }
     }
