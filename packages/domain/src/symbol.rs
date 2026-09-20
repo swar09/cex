@@ -53,3 +53,25 @@ impl Symbol {
         }
     }
 }
+
+#[derive(Copy, Clone, Serialize, Deserialize, PartialEq, Hash, Eq)]
+pub enum Currency {
+    // All are in there smallest units
+    // eg 1 dollars = 100 cents , price will be in cents
+    #[serde(rename = "USDT")]
+    Usdt,
+    #[serde(rename = "BTC")]
+    Btc,
+    #[serde(rename = "ETH")]
+    Eth,
+    #[serde(rename = "SOL")]
+    Sol,
+    #[serde(rename = "Inr")]
+    Inr,
+    #[serde(rename = "BNB")]
+    Bnb,
+    #[serde(rename = "XRP")]
+    Xrp,
+    #[serde(rename = "USDC")]
+    Usdc,
+}

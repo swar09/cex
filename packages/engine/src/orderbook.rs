@@ -264,9 +264,9 @@ impl OrderBook {
         Some(self.match_orders())
     }
 
-    pub fn cancel_order(&mut self, order_id: OrderId) {
+    pub fn cancel_order(&mut self, order_id: OrderId) -> bool {
         let Some(order_entry) = self.orders.remove(&order_id) else {
-            return;
+            return false;
         };
         let remaining_quantity = order_entry.order.borrow().get_remaining_quantity();
 
@@ -279,6 +279,7 @@ impl OrderBook {
                     self.data.remove(&order_entry.price);
                 }
                 self.on_order_cancelled(order_entry.price, remaining_quantity);
+                return true;
             },
             Side::Sell => {
                 let level = self.asks.get_mut(&order_entry.price).unwrap(); // price level error
@@ -288,6 +289,7 @@ impl OrderBook {
                     self.data.remove(&order_entry.price);
                 }
                 self.on_order_cancelled(order_entry.price, remaining_quantity);
+                return true;
             },
         }
     }
