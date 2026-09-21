@@ -14,12 +14,12 @@ pub struct LevelInfo {
 
 pub type LevelInfos = Vec<LevelInfo>;
 
-pub struct OrderBookLeveInfos {
+pub struct OrderBookLevelInfos {
     pub bids: LevelInfos,
     pub asks: LevelInfos,
 }
 
-impl OrderBookLeveInfos {
+impl OrderBookLevelInfos {
     pub fn get_bids(&self) -> &LevelInfos {
         &self.bids
     }

@@ -21,7 +21,7 @@ pub struct Order {
     pub order_id: OrderId,
     pub side: Side,
     pub price: Option<Price>,
-    pub intial_quantity: Quantity,
+    pub initial_quantity: Quantity,
     pub remaining_quantity: Quantity,
 }
 
@@ -41,7 +41,7 @@ impl Order {
             order_id,
             side,
             price: Some(price),
-            intial_quantity: quantity,
+            initial_quantity: quantity,
             remaining_quantity: quantity,
         }
     }
@@ -54,7 +54,7 @@ impl Order {
             order_id,
             side,
             price,
-            intial_quantity: quantity,
+            initial_quantity: quantity,
             remaining_quantity: quantity,
         }
     }
@@ -66,19 +66,19 @@ impl Order {
         self.side
     }
     pub fn get_price(&self) -> Price {
-        self.price.unwrap()
+        self.price.unwrap() // intentional 
     }
     pub fn get_order_type(&self) -> OrderType {
         self.order_type
     }
-    pub fn get_inital_quantity(&self) -> Quantity {
-        self.intial_quantity
+    pub fn get_initial_quantity(&self) -> Quantity {
+        self.initial_quantity
     }
     pub fn get_remaining_quantity(&self) -> Quantity {
         self.remaining_quantity
     }
     pub fn get_filled_quantity(&self) -> Quantity {
-        self.intial_quantity - self.remaining_quantity
+        self.initial_quantity - self.remaining_quantity
     }
     pub fn fill(&mut self, quantity: Quantity) {
         if quantity > self.get_remaining_quantity() {
@@ -130,7 +130,7 @@ impl ModifyOrder {
             side: self.get_side(),
             order_id: self.get_order_id(),
             price: Some(self.get_price()),
-            intial_quantity: self.get_quantity(),
+            initial_quantity: self.get_quantity(),
             remaining_quantity: self.get_quantity(),
         };
         Rc::new(RefCell::new(order))

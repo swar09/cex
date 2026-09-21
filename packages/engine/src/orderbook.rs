@@ -12,13 +12,6 @@ use domain::{
     types::{OrderId, Price, Side, Trade, TradeInfo, Trades},
 };
 
-const START: u32 = 9;
-const END: u32 = 16;
-
-// use expect("Document why this is a bug") use this to handle most safe unwrap.
-// this will trigger a loud panic but its intentional
-// use thiserror
-
 pub struct OrderEntry {
     pub order: OrderPointer,
     pub price: Price,
@@ -209,7 +202,7 @@ impl OrderBook {
             order_id: order.order_id,
             side: order.side,
             price: order.price,
-            intial_quantity: order.quantity,
+            initial_quantity: order.quantity,
             remaining_quantity: order.quantity,
         }));
         self.add_order(order_pointer)
@@ -222,7 +215,7 @@ impl OrderBook {
                 order.borrow().get_order_id(),
                 order.borrow().get_side(),
                 order.borrow().get_price(),
-                order.borrow().get_inital_quantity(),
+                order.borrow().get_initial_quantity(),
             )
         };
 
@@ -260,7 +253,7 @@ impl OrderBook {
                 slab_key,
             },
         );
-        self.on_order_added(order_price, order.borrow().get_inital_quantity());
+        self.on_order_added(order_price, order.borrow().get_initial_quantity());
         Some(self.match_orders())
     }
 
@@ -272,7 +265,10 @@ impl OrderBook {
 
         match order_entry.side {
             Side::Buy => {
-                let level = self.bids.get_mut(&Reverse(order_entry.price)).unwrap(); // price level error
+                let level = self
+                    .bids
+                    .get_mut(&Reverse(order_entry.price))
+                    .expect("Order & PriceLevel exists check above");
                 level.remove(order_entry.slab_key);
                 if level.is_empty() {
                     self.bids.remove(&Reverse(order_entry.price));
@@ -282,7 +278,10 @@ impl OrderBook {
                 true
             },
             Side::Sell => {
-                let level = self.asks.get_mut(&order_entry.price).unwrap(); // price level error
+                let level = self
+                    .asks
+                    .get_mut(&order_entry.price)
+                    .expect("Order & PriceLevel exists check above");
                 level.remove(order_entry.slab_key);
                 if level.is_empty() {
                     self.asks.remove(&order_entry.price);
@@ -298,7 +297,10 @@ impl OrderBook {
         if !self.orders.contains_key(&modify_order.order_id) {
             return None;
         }
-        let existing_order_entry = self.orders.get(&modify_order.order_id).unwrap(); // order entry error 
+        let existing_order_entry = self
+            .orders
+            .get(&modify_order.order_id)
+            .expect("OrderEntry not empty exists check above");
         let order_type = existing_order_entry.order.borrow().get_order_type();
         self.cancel_order(modify_order.order_id);
         self.add_order(modify_order.to_order_pointer(order_type))
@@ -374,7 +376,6 @@ impl OrderBook {
             },
         }
     }
-    // pub fn shutdown() {}
 }
 
 impl Default for OrderBook {
@@ -400,7 +401,7 @@ mod tests {
             order_id: id,
             side,
             price: Some(price),
-            intial_quantity: qty,
+            initial_quantity: qty,
             remaining_quantity: qty,
         }))
     }
@@ -551,7 +552,7 @@ mod tests {
     fn test_partial_match_bid_remains() {
         let mut book = OrderBook::new();
         book.add_order(gtc_buy(1, 100, 20)); // buy 20
-        let trades = book.add_order(gtc_sell(2, 100, 10)).unwrap(); // sell 10
+        let _trades = book.add_order(gtc_sell(2, 100, 10)).unwrap(); // sell 10
 
         // bid still alive with 10 remaining
         assert!(book.orders.contains_key(&1));
@@ -563,7 +564,7 @@ mod tests {
     fn test_partial_match_ask_remains() {
         let mut book = OrderBook::new();
         book.add_order(gtc_buy(1, 100, 10)); // buy 10
-        let trades = book.add_order(gtc_sell(2, 100, 20)).unwrap(); // sell 20
+        let _trades = book.add_order(gtc_sell(2, 100, 20)).unwrap(); // sell 20
 
         assert!(!book.orders.contains_key(&1)); // bid fully filled
         assert!(book.orders.contains_key(&2)); // ask remains

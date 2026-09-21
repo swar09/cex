@@ -1,13 +1,16 @@
 use std::collections::HashMap;
 
-use crossbeam::channel::Sender;
+use crossbeam::channel::{Sender, TrySendError};
 use domain::{OrderIds, Symbol, Trades};
+use thiserror::Error;
 
 use crate::{commands::ExchangeCommand, events::OrderBookEvents, orderbook::OrderBook};
-
-// TODO : fix the unwraps later
+#[derive(Error, Debug)]
 pub enum ExchangeError {
-    ExchangeEventTrySendError,
+    #[error("Channel send failed")]
+    ExchangeEventTrySendError(TrySendError<OrderBookEvents>),
+    #[error("Orderbook access failed")]
+    OrderBookAccessError(Symbol),
 }
 pub struct Exchange {
     pub orderbooks: HashMap<Symbol, OrderBook>,
@@ -27,52 +30,69 @@ impl Exchange {
         self.orderbooks.insert(symbol, orderbook);
     }
 
-    pub fn handle_cmd(&mut self, cmd: ExchangeCommand) {
+    pub fn handle_cmd(&mut self, cmd: ExchangeCommand) -> Result<(), ExchangeError> {
         match cmd {
             ExchangeCommand::AddNewOrder(symbol, new_order) => {
                 let order_id = new_order.order_id;
-                let book = self.orderbooks.get_mut(&symbol).unwrap();
+                let book = self
+                    .orderbooks
+                    .get_mut(&symbol)
+                    .ok_or(ExchangeError::OrderBookAccessError(symbol))?;
                 match book.add_new_order(new_order) {
                     Some(trades) => {
                         self.event_tx
                             .try_send(OrderBookEvents::OrderAdded(symbol, order_id))
-                            .unwrap();
+                            .map_err(ExchangeError::ExchangeEventTrySendError)?;
 
-                        self.handle_trades(trades, symbol)
+                        self.handle_trades(trades, symbol)?;
+                        Ok(())
                     },
                     None => {
                         self.event_tx
                             .try_send(OrderBookEvents::OrderRejected(symbol, order_id))
-                            .unwrap();
+                            .map_err(ExchangeError::ExchangeEventTrySendError)?;
+                        Ok(())
                     },
-                };
+                }
             },
             ExchangeCommand::CancelOrder(symbol, order_id) => {
-                let book = self.orderbooks.get_mut(&symbol).unwrap();
+                let book = self
+                    .orderbooks
+                    .get_mut(&symbol)
+                    .ok_or(ExchangeError::OrderBookAccessError(symbol))?;
                 if book.cancel_order(order_id) {
                     self.event_tx
                         .try_send(OrderBookEvents::OrderCancelled(symbol, order_id))
-                        .unwrap();
+                        .map_err(ExchangeError::ExchangeEventTrySendError)?;
                 }
+                Ok(())
             },
             ExchangeCommand::ModifyOrder(symbol, modify_order) => {
-                let book = self.orderbooks.get_mut(&symbol).unwrap();
+                let book = self
+                    .orderbooks
+                    .get_mut(&symbol)
+                    .ok_or(ExchangeError::OrderBookAccessError(symbol))?;
                 match book.modify_order(modify_order) {
                     Some(trades) => {
                         self.event_tx
                             .try_send(OrderBookEvents::OrderModified(symbol, modify_order))
-                            .unwrap();
-                        self.handle_trades(trades, symbol)
+                            .map_err(ExchangeError::ExchangeEventTrySendError)?;
+                        self.handle_trades(trades, symbol)?;
+                        Ok(())
                     },
                     None => {
                         self.event_tx
                             .try_send(OrderBookEvents::ModifyOrderRejected(symbol, modify_order))
-                            .unwrap();
+                            .map_err(ExchangeError::ExchangeEventTrySendError)?;
+                        Ok(())
                     },
-                };
+                }
             },
             ExchangeCommand::PruneExpiredOrders(symbol, prune_order_type) => {
-                let book = self.orderbooks.get_mut(&symbol).unwrap();
+                let book = self
+                    .orderbooks
+                    .get_mut(&symbol)
+                    .ok_or(ExchangeError::OrderBookAccessError(symbol))?;
                 let mut order_ids: OrderIds = vec![];
                 for order_entry in book.orders.values() {
                     let (order_id, order_type) = {
@@ -89,11 +109,12 @@ impl Exchange {
                 book.cancel_orders(order_ids.clone());
                 self.event_tx
                     .try_send(OrderBookEvents::OrdersExpired(symbol, order_ids))
-                    .unwrap();
+                    .map_err(ExchangeError::ExchangeEventTrySendError)?;
+                Ok(())
             },
         }
     }
-    pub fn handle_trades(&mut self, trades: Trades, symbol: Symbol) {
+    pub fn handle_trades(&mut self, trades: Trades, symbol: Symbol) -> Result<(), ExchangeError> {
         for trade in trades {
             // ask_trade
             let (order_id, price, quantity) = {
@@ -102,7 +123,7 @@ impl Exchange {
             };
             self.event_tx
                 .try_send(OrderBookEvents::OrderMatched(symbol, order_id, price, quantity))
-                .unwrap();
+                .map_err(ExchangeError::ExchangeEventTrySendError)?;
             // bid_trade
             let (order_id, price, quantity) = {
                 let order = trade.bid_trade;
@@ -110,8 +131,9 @@ impl Exchange {
             };
             self.event_tx
                 .try_send(OrderBookEvents::OrderMatched(symbol, order_id, price, quantity))
-                .unwrap();
+                .map_err(ExchangeError::ExchangeEventTrySendError)?;
         }
+        Ok(())
     }
 }
 
@@ -173,8 +195,12 @@ mod tests {
         let (mut exchange, r) = new_exchange();
         exchange.add_new_orderbook(SYMBOL);
 
-        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_gtc(1)));
-        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_sell_gtc(2)));
+        exchange
+            .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_gtc(1)))
+            .unwrap();
+        exchange
+            .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_sell_gtc(2)))
+            .unwrap();
 
         assert_eq!(
             drain(&r),
@@ -193,7 +219,9 @@ mod tests {
         let (mut exchange, r) = new_exchange();
         exchange.add_new_orderbook(SYMBOL);
 
-        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_gtc(1)));
+        exchange
+            .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_gtc(1)))
+            .unwrap();
 
         assert_eq!(drain(&r), vec![OrderBookEvents::OrderAdded(SYMBOL, 1)]);
     }
@@ -204,8 +232,12 @@ mod tests {
         let (mut exchange, r) = new_exchange();
         exchange.add_new_orderbook(SYMBOL);
 
-        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_gtc(1)));
-        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_sell_fak(2)));
+        exchange
+            .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_gtc(1)))
+            .unwrap();
+        exchange
+            .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_sell_fak(2)))
+            .unwrap();
 
         let events = drain(&r);
         assert!(events.contains(&OrderBookEvents::OrderAdded(SYMBOL, 1)));
@@ -219,7 +251,9 @@ mod tests {
         let (mut exchange, r) = new_exchange();
         exchange.add_new_orderbook(SYMBOL);
 
-        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_fak(1)));
+        exchange
+            .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_fak(1)))
+            .unwrap();
 
         assert_eq!(drain(&r), vec![OrderBookEvents::OrderRejected(SYMBOL, 1)]);
     }
@@ -230,10 +264,12 @@ mod tests {
         let (mut exchange, r) = new_exchange();
         exchange.add_new_orderbook(SYMBOL);
 
-        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_gtc(1)));
+        exchange
+            .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_gtc(1)))
+            .unwrap();
         drain(&r);
 
-        exchange.handle_cmd(ExchangeCommand::CancelOrder(SYMBOL, 1));
+        exchange.handle_cmd(ExchangeCommand::CancelOrder(SYMBOL, 1)).unwrap();
         assert_eq!(drain(&r), vec![OrderBookEvents::OrderCancelled(SYMBOL, 1)]);
     }
 
@@ -243,7 +279,7 @@ mod tests {
         let (mut exchange, r) = new_exchange();
         exchange.add_new_orderbook(SYMBOL);
 
-        exchange.handle_cmd(ExchangeCommand::CancelOrder(SYMBOL, 999));
+        exchange.handle_cmd(ExchangeCommand::CancelOrder(SYMBOL, 999)).unwrap();
         assert_eq!(drain(&r), vec![]); // cancel_order returned false, no event sent
     }
 
@@ -253,11 +289,15 @@ mod tests {
         let (mut exchange, r) = new_exchange();
         exchange.add_new_orderbook(SYMBOL);
 
-        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_gtc(1)));
-        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_sell_gtc(2)));
+        exchange
+            .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_gtc(1)))
+            .unwrap();
+        exchange
+            .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_sell_gtc(2)))
+            .unwrap();
         drain(&r);
 
-        exchange.handle_cmd(ExchangeCommand::CancelOrder(SYMBOL, 1));
+        exchange.handle_cmd(ExchangeCommand::CancelOrder(SYMBOL, 1)).unwrap();
         assert_eq!(drain(&r), vec![]);
     }
 
@@ -268,8 +308,12 @@ mod tests {
         exchange.add_new_orderbook(Symbol::EthInr);
 
         // a resting buy on BtcInr should NOT match a sell on EthInr
-        exchange.handle_cmd(ExchangeCommand::AddNewOrder(Symbol::BtcInr, new_buy_gtc(1)));
-        exchange.handle_cmd(ExchangeCommand::AddNewOrder(Symbol::EthInr, new_sell_gtc(2)));
+        exchange
+            .handle_cmd(ExchangeCommand::AddNewOrder(Symbol::BtcInr, new_buy_gtc(1)))
+            .unwrap();
+        exchange
+            .handle_cmd(ExchangeCommand::AddNewOrder(Symbol::EthInr, new_sell_gtc(2)))
+            .unwrap();
 
         let events = drain(&r);
         assert_eq!(
@@ -288,9 +332,13 @@ mod tests {
         let mut id: OrderId = 0;
         for symbol in Symbol::ALL.iter() {
             exchange.add_new_orderbook(*symbol);
-            exchange.handle_cmd(ExchangeCommand::AddNewOrder(*symbol, new_buy_gtc(id)));
+            exchange
+                .handle_cmd(ExchangeCommand::AddNewOrder(*symbol, new_buy_gtc(id)))
+                .unwrap();
             id += 1;
-            exchange.handle_cmd(ExchangeCommand::AddNewOrder(*symbol, new_sell_gtc(id)));
+            exchange
+                .handle_cmd(ExchangeCommand::AddNewOrder(*symbol, new_sell_gtc(id)))
+                .unwrap();
             id += 1;
         }
 
