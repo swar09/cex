@@ -4,3 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+crossbeam = "0.8.5"
+serde = "1.0.229"
+domain = { path = "../domain" }
+engine = { path = "../engine" }
