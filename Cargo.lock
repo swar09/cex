@@ -260,6 +260,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "disruptor"
+version = "4.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c55eaac78b877dfff17ac360a8abfe8a9b9efc891e9e35c630a7e856784397e9"
+dependencies = [
+ "core_affinity",
+ "crossbeam-utils",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "domain"
 version = "0.1.0"
 dependencies = [
@@ -267,7 +278,7 @@ dependencies = [
  "rand",
  "serde",
  "slab",
- "thiserror",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -303,8 +314,9 @@ dependencies = [
  "chrono",
  "core_affinity",
  "crossbeam",
+ "disruptor",
  "domain",
- "thiserror",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -358,6 +370,7 @@ version = "0.1.0"
 dependencies = [
  "cache",
  "db",
+ "disruptor",
  "tokio",
 ]
 
@@ -555,16 +568,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
-name = "logger"
-version = "0.1.0"
-dependencies = [
- "crossbeam",
- "domain",
- "engine",
- "serde",
-]
-
-[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -693,6 +696,10 @@ dependencies = [
  "url",
  "xxhash-rust",
 ]
+
+[[package]]
+name = "risk"
+version = "0.1.0"
 
 [[package]]
 name = "rustversion"
@@ -830,11 +837,31 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
+dependencies = [
+ "thiserror-impl 1.0.69",
+]
+
+[[package]]
+name = "thiserror"
 version = "2.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f"
 dependencies = [
- "thiserror-impl",
+ "thiserror-impl 2.0.20",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "1.0.69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -1032,6 +1059,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "crossbeam",
+ "disruptor",
  "domain",
  "engine",
 ]

@@ -4,8 +4,9 @@ members = [
     "bin/server",
     "packages/db",
     "packages/domain",
-    "packages/engine", "packages/gateway",
-    "packages/logger",
+    "packages/engine",
+    "packages/gateway",
     "packages/cache",
     "packages/workers",
+    "packages/risk",
 ]

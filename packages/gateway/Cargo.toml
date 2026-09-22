@@ -6,4 +6,5 @@ edition = "2024"
 [dependencies]
 cache = { version = "0.1.0", path = "../cache" }
 db = { version = "0.1.0", path = "../db" }
+disruptor = "4.4.0"
 tokio = "1.53.1"
