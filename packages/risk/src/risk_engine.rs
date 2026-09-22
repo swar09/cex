@@ -57,6 +57,9 @@ impl RiskEngine {
             wallets,
         }
     }
+    pub fn check_and_pass() {}
+    pub fn reserve() {}
+    pub fn check_reserve() {}
 }
 
 mod tests {}
