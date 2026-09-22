@@ -22,22 +22,22 @@ pub fn spawn_gfd_prune_worker(
                     .map(|naive| naive.and_utc());
 
                 let next_run = match target_today {
-                    Some(target) if target > now => target,
+                    Some(target) if now < target => target,
                     Some(target) => target + ChronoDuration::days(1),
                     None => {
-                        eprintln!("[Pruner] Invalid UTC hour: {}", utc_end_hr);
+                        eprintln!("[Pruner-{:?}] Invalid UTC hour: {}", symbol, utc_end_hr);
                         return;
                     },
                 };
 
                 if let Ok(std_duration) = (next_run - now).to_std() {
-                    thread::sleep(std_duration + Duration::from_millis(50));
+                    thread::sleep(std_duration + Duration::from_millis(100));
                 }
 
                 let cmd = ExchangeCommand::PruneExpiredOrders(symbol, OrderType::GoodForDay);
 
                 if let Err(e) = cmd_tx.send(cmd) {
-                    eprintln!("[Pruner] Engine receiver dropped, stopping worker: {e}");
+                    eprintln!("[Pruner-{:?}] Engine receiver dropped, stopping worker: {e}", symbol);
                     break;
                 }
             }

@@ -25,7 +25,7 @@ pub struct Order {
     pub remaining_quantity: Quantity,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct NewOrder {
     pub order_type: OrderType,
     pub order_id: OrderId,

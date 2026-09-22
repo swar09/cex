@@ -100,7 +100,7 @@ impl Symbol {
     }
 }
 
-#[derive(Copy, Clone, Serialize, Deserialize, PartialEq, Hash, Eq)]
+#[derive(Copy, Clone, Serialize, Deserialize, PartialEq, Hash, Eq, Debug)]
 pub enum Currency {
     // All are in there smallest units
     // eg 1 dollars = 100 cents , price will be in cents

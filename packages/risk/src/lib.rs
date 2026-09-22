@@ -1,5 +1,5 @@
 // the core risk engine
-// all user accounts and balances stored in memeory
+// all user accounts and balances stored in memory
 // all order validations and risks are calculated here
 // accounts structs and there methods are defined here
 pub mod risk_engine;

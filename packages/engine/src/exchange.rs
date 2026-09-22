@@ -6,7 +6,7 @@ use thiserror::Error;
 
 use crate::{
     commands::ExchangeCommand,
-    events::{EventDispatcher, ExchangeEvents, OrderBookEvents},
+    events::{EventDispatcher, EventEnvelope, OrderBookEvent},
     orderbook::OrderBook,
 };
 #[derive(Error, Debug)]
@@ -22,7 +22,7 @@ pub struct Exchange {
 }
 
 impl Exchange {
-    pub fn new(p: SingleProducer<ExchangeEvents, MultiConsumerBarrier>) -> Self {
+    pub fn new(p: SingleProducer<EventEnvelope, MultiConsumerBarrier>) -> Self {
         Self {
             orderbooks: HashMap::new(),        // empty
             event_tx: EventDispatcher::new(p), // sender
@@ -45,7 +45,7 @@ impl Exchange {
                 match book.add_new_order(new_order) {
                     Some(trades) => {
                         self.event_tx
-                            .try_send(OrderBookEvents::OrderAdded(symbol, order_id))
+                            .try_send(OrderBookEvent::OrderAdded(symbol, order_id))
                             .map_err(ExchangeError::ExchangeEventTrySendError)?;
 
                         self.handle_trades(trades, symbol)?;
@@ -53,7 +53,7 @@ impl Exchange {
                     },
                     None => {
                         self.event_tx
-                            .try_send(OrderBookEvents::OrderRejected(symbol, order_id))
+                            .try_send(OrderBookEvent::OrderRejected(symbol, order_id))
                             .map_err(ExchangeError::ExchangeEventTrySendError)?;
                         Ok(())
                     },
@@ -66,7 +66,7 @@ impl Exchange {
                     .ok_or(ExchangeError::OrderBookAccessError(symbol))?;
                 if book.cancel_order(order_id) {
                     self.event_tx
-                        .try_send(OrderBookEvents::OrderCancelled(symbol, order_id))
+                        .try_send(OrderBookEvent::OrderCancelled(symbol, order_id))
                         .map_err(ExchangeError::ExchangeEventTrySendError)?;
                 }
                 Ok(())
@@ -79,14 +79,14 @@ impl Exchange {
                 match book.modify_order(modify_order) {
                     Some(trades) => {
                         self.event_tx
-                            .try_send(OrderBookEvents::OrderModified(symbol, modify_order))
+                            .try_send(OrderBookEvent::OrderModified(symbol, modify_order))
                             .map_err(ExchangeError::ExchangeEventTrySendError)?;
                         self.handle_trades(trades, symbol)?;
                         Ok(())
                     },
                     None => {
                         self.event_tx
-                            .try_send(OrderBookEvents::ModifyOrderRejected(symbol, modify_order))
+                            .try_send(OrderBookEvent::ModifyOrderRejected(symbol, modify_order))
                             .map_err(ExchangeError::ExchangeEventTrySendError)?;
                         Ok(())
                     },
@@ -112,7 +112,7 @@ impl Exchange {
                 }
                 book.cancel_orders(order_ids.clone());
                 self.event_tx
-                    .try_send(OrderBookEvents::OrdersExpired(symbol, order_ids))
+                    .try_send(OrderBookEvent::OrdersExpired(symbol, order_ids))
                     .map_err(ExchangeError::ExchangeEventTrySendError)?;
                 Ok(())
             },
@@ -126,7 +126,7 @@ impl Exchange {
                 (order.order_id, order.price, order.quantity)
             };
             self.event_tx
-                .try_send(OrderBookEvents::OrderMatched(symbol, order_id, price, quantity))
+                .try_send(OrderBookEvent::OrderMatched(symbol, order_id, price, quantity))
                 .map_err(ExchangeError::ExchangeEventTrySendError)?;
             // bid_trade
             let (order_id, price, quantity) = {
@@ -134,7 +134,7 @@ impl Exchange {
                 (order.order_id, order.price, order.quantity)
             };
             self.event_tx
-                .try_send(OrderBookEvents::OrderMatched(symbol, order_id, price, quantity))
+                .try_send(OrderBookEvent::OrderMatched(symbol, order_id, price, quantity))
                 .map_err(ExchangeError::ExchangeEventTrySendError)?;
         }
         Ok(())
@@ -148,10 +148,10 @@ mod tests {
 
     use super::*;
 
-    type TestEventPoller = EventPoller<ExchangeEvents, SingleProducerBarrier>;
+    type TestEventPoller = EventPoller<EventEnvelope, SingleProducerBarrier>;
 
     fn new_exchange() -> (Exchange, TestEventPoller) {
-        let event_factory = || ExchangeEvents { event: None };
+        let event_factory = || EventEnvelope { event: None };
         let builder = build_single_producer(1024, event_factory, BusySpin).with_multi_consumer();
         let (event_poller, builder) = builder.new_event_poller();
         let p = builder.build();
@@ -195,7 +195,7 @@ mod tests {
         }
     }
 
-    fn drain(poller: &mut TestEventPoller) -> Vec<OrderBookEvents> {
+    fn drain(poller: &mut TestEventPoller) -> Vec<OrderBookEvent> {
         let mut events = Vec::new();
         while let Ok(mut guard) = poller.poll() {
             for item in &mut guard {
@@ -223,10 +223,10 @@ mod tests {
         assert_eq!(
             drain(&mut poller),
             vec![
-                OrderBookEvents::OrderAdded(SYMBOL, 1),
-                OrderBookEvents::OrderAdded(SYMBOL, 2),
-                OrderBookEvents::OrderMatched(SYMBOL, 2, 100, 1),
-                OrderBookEvents::OrderMatched(SYMBOL, 1, 100, 1),
+                OrderBookEvent::OrderAdded(SYMBOL, 1),
+                OrderBookEvent::OrderAdded(SYMBOL, 2),
+                OrderBookEvent::OrderMatched(SYMBOL, 2, 100, 1),
+                OrderBookEvent::OrderMatched(SYMBOL, 1, 100, 1),
             ]
         );
     }
@@ -241,7 +241,7 @@ mod tests {
             .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_gtc(1)))
             .unwrap();
 
-        assert_eq!(drain(&mut poller), vec![OrderBookEvents::OrderAdded(SYMBOL, 1)]);
+        assert_eq!(drain(&mut poller), vec![OrderBookEvent::OrderAdded(SYMBOL, 1)]);
     }
 
     #[test]
@@ -258,9 +258,9 @@ mod tests {
             .unwrap();
 
         let events = drain(&mut poller);
-        assert!(events.contains(&OrderBookEvents::OrderAdded(SYMBOL, 1)));
-        assert!(events.contains(&OrderBookEvents::OrderMatched(SYMBOL, 1, 100, 1)));
-        assert!(events.contains(&OrderBookEvents::OrderMatched(SYMBOL, 2, 100, 1)));
+        assert!(events.contains(&OrderBookEvent::OrderAdded(SYMBOL, 1)));
+        assert!(events.contains(&OrderBookEvent::OrderMatched(SYMBOL, 1, 100, 1)));
+        assert!(events.contains(&OrderBookEvent::OrderMatched(SYMBOL, 2, 100, 1)));
     }
 
     #[test]
@@ -273,7 +273,7 @@ mod tests {
             .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_fak(1)))
             .unwrap();
 
-        assert_eq!(drain(&mut poller), vec![OrderBookEvents::OrderRejected(SYMBOL, 1)]);
+        assert_eq!(drain(&mut poller), vec![OrderBookEvent::OrderRejected(SYMBOL, 1)]);
     }
 
     #[test]
@@ -288,7 +288,7 @@ mod tests {
         drain(&mut poller);
 
         exchange.handle_cmd(ExchangeCommand::CancelOrder(SYMBOL, 1)).unwrap();
-        assert_eq!(drain(&mut poller), vec![OrderBookEvents::OrderCancelled(SYMBOL, 1)]);
+        assert_eq!(drain(&mut poller), vec![OrderBookEvent::OrderCancelled(SYMBOL, 1)]);
     }
 
     #[test]
@@ -337,11 +337,11 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                OrderBookEvents::OrderAdded(Symbol::BtcInr, 1),
-                OrderBookEvents::OrderAdded(Symbol::EthInr, 2),
+                OrderBookEvent::OrderAdded(Symbol::BtcInr, 1),
+                OrderBookEvent::OrderAdded(Symbol::EthInr, 2),
             ]
         );
-        assert!(!events.iter().any(|e| matches!(e, OrderBookEvents::OrderMatched(..))));
+        assert!(!events.iter().any(|e| matches!(e, OrderBookEvent::OrderMatched(..))));
     }
 
     #[test]
@@ -363,7 +363,7 @@ mod tests {
         let events = drain(&mut poller);
         let matched_count = events
             .iter()
-            .filter(|e| matches!(e, OrderBookEvents::OrderMatched(..)))
+            .filter(|e| matches!(e, OrderBookEvent::OrderMatched(..)))
             .count();
 
         assert_eq!(matched_count, Symbol::ALL.len() * 2);
