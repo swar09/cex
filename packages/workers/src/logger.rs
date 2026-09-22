@@ -17,10 +17,10 @@ use engine::{commands::CommandDispatcher, events::EventConsumer};
 
 pub fn orderbook_events_logger(
     mut consumer: EventConsumer,
-    cmd_producer: CommandDispatcher,
+    _cmd_producer: CommandDispatcher,
 ) -> Result<thread::JoinHandle<()>, std::io::Error> {
     thread::Builder::new()
-        .name(format!("orderbook-events-logger"))
+        .name("orderbook-events-logger".to_string())
         .spawn(move || {
             // match the event with symbol
             // publish to kafka topic symbol.orderbook.logs
@@ -29,11 +29,11 @@ pub fn orderbook_events_logger(
                 match result {
                     Ok(orderbook_events) => {
                         for event in orderbook_events {
-                            let symbol = event.symbol().unwrap().as_str(); // handle error and publish to unknown topic
+                            let _symbol = event.symbol().unwrap().as_str(); // handle error and publish to unknown topic
                             // create a struct and serialize it
                         }
                     },
-                    Err(e) => {},
+                    Err(_e) => {},
                 }
             }
         })

@@ -1,7 +1,7 @@
 use disruptor::{EventPoller, MultiConsumerBarrier, Polling, Producer, SingleProducer, SingleProducerBarrier};
 use domain::{ModifyOrder, OrderId, OrderIds, Price, Quantity, Symbol};
 
-// orderbook events single producer multiple consumers 
+// orderbook events single producer multiple consumers
 #[derive(Clone, PartialEq, Debug)]
 pub enum OrderBookEvent {
     OrderMatched(Symbol, OrderId, Price, Quantity), // trade occurred
