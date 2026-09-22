@@ -1,22 +1,20 @@
-use disruptor::{
-    EventPoller, MultiConsumerBarrier, Polling, Producer, SingleProducer,
-};
+use disruptor::{EventPoller, MultiConsumerBarrier, Polling, Producer, SingleProducer};
 use domain::{ModifyOrder, OrderId, OrderIds, Price, Quantity, Symbol};
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum OrderBookEvents {
-    OrderMatched(Symbol, OrderId, Price, Quantity), // orderid or orderpointer ?
-    OrderCancelled(Symbol, OrderId),
-    OrderAdded(Symbol, OrderId),
-    OrderModified(Symbol, ModifyOrder),
-    OrderRejected(Symbol, OrderId),
-    ModifyOrderRejected(Symbol, ModifyOrder),
-    // TODO : How to handle this events
-    OrdersExpired(Symbol, OrderIds),
-    OrderPartiallyFilled(Symbol),
-    MarketOpened(Symbol),
-    MarketClosed(Symbol),
-    Error(u32),
+    OrderMatched(Symbol, OrderId, Price, Quantity), // trade happen
+    OrderCancelled(Symbol, OrderId),                // order cancelled by trader
+    OrderAdded(Symbol, OrderId),                    // order added by trader
+    OrderModified(Symbol, ModifyOrder),             // order modified by trader
+    OrderRejected(Symbol, OrderId),                 // order rejected by exchange
+    ModifyOrderRejected(Symbol, ModifyOrder),       // modify order req rejected by exchange
+    // TODO : How to handle this events ?
+    OrdersExpired(Symbol, OrderIds), // order expired
+    OrderPartiallyFilled(Symbol),    // todo , order partially filled
+    MarketOpened(Symbol),            // todo market opens
+    MarketClosed(Symbol),            // todo market clone
+    Error(u32),                      // error in order book
 }
 
 pub struct EventDispatcher {

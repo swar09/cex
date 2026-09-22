@@ -9,4 +9,5 @@ members = [
     "packages/cache",
     "packages/workers",
     "packages/risk",
+    "packages/queue",
 ]
