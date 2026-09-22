@@ -1,2 +1,2 @@
-pub mod pruner;
 pub mod logger;
+pub mod pruner;

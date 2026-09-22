@@ -1,5 +1,5 @@
 use disruptor::{
-    BusySpin, EventPoller, MultiConsumerBarrier, Polling, Producer, SingleProducer, build_single_producer,
+    EventPoller, MultiConsumerBarrier, Polling, Producer, SingleProducer,
 };
 use domain::{ModifyOrder, OrderId, OrderIds, Price, Quantity, Symbol};
 
@@ -49,7 +49,7 @@ impl EventConsumer {
         match self.event_poller.poll() {
             Ok(mut event_gaurd) => {
                 for exchange_message in &mut event_gaurd {
-                    let event = exchange_message.event.as_ref().unwrap();
+                    let _event = exchange_message.event.as_ref().unwrap();
                     // process the event
                     // self.format
                     // self.publish_to_kaftka

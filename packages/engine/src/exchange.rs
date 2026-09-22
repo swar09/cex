@@ -369,4 +369,3 @@ mod tests {
         assert_eq!(matched_count, Symbol::ALL.len() * 2);
     }
 }
-
