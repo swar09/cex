@@ -19,24 +19,30 @@ pub enum OrderBookEvents {
     Error(u32),
 }
 
-struct EventDispatcher {
-    pub producer: SingleProducer<ExchangeEventProducer, MultiConsumerBarrier>, // multi consumers configured
+pub struct EventDispatcher {
+    pub producer: SingleProducer<ExchangeEvents, MultiConsumerBarrier>, // multi consumers configured
 }
 
 impl EventDispatcher {
-    pub fn new(p: SingleProducer<ExchangeEventProducer, MultiConsumerBarrier>) -> Self {
+    pub fn new(p: SingleProducer<ExchangeEvents, MultiConsumerBarrier>) -> Self {
         Self { producer: p }
     }
+    // can stall producer if buffer is full
     pub fn publish(&mut self, event: OrderBookEvents) {
         self.producer.publish(|e| e.event = Some(event));
     }
+    // will return error if event is full no stalling or blocking
+    pub fn try_send(&mut self, event: OrderBookEvents) -> Result<i64, disruptor::RingBufferFull> {
+        self.producer.try_publish(|e| e.event = Some(event))
+    }
 }
 
+// x-Consumer struct is part of the workers
 struct EventConsumer {
-    pub event_poller: EventPoller<ExchangeEventProducer, MultiConsumerBarrier>,
+    pub event_poller: EventPoller<ExchangeEvents, MultiConsumerBarrier>,
 }
 impl EventConsumer {
-    pub fn new(p: EventPoller<ExchangeEventProducer, MultiConsumerBarrier>) -> Self {
+    pub fn new(p: EventPoller<ExchangeEvents, MultiConsumerBarrier>) -> Self {
         Self { event_poller: p }
     }
     pub fn poll(&mut self) {
@@ -44,11 +50,11 @@ impl EventConsumer {
             Ok(mut event_gaurd) => {
                 for exchange_message in &mut event_gaurd {
                     let event = exchange_message.event.as_ref().unwrap();
-                    // process the event 
-                    // self.format 
+                    // process the event
+                    // self.format
                     // self.publish_to_kaftka
                     // self.publish_to_websockets
-                    // etc 
+                    // etc
                 }
             },
             Err(Polling::NoEvents) => {},
@@ -57,23 +63,6 @@ impl EventConsumer {
     }
 }
 
-fn create_test() {
-    let event_factory = || ExchangeEventProducer { event: None };
-    let mut builder = build_single_producer(4096, event_factory, BusySpin);
-    let (event_poller_1, builder) = builder.new_event_poller();
-    let (event_poller_2, builder) = builder.new_event_poller();
-    let mut p = builder.build();
-    let mut new_dispatcher = EventDispatcher::new(p);
-    new_dispatcher.publish(OrderBookEvents::Error(23));
-}
-pub struct ExchangeEventProducer {
+pub struct ExchangeEvents {
     pub event: Option<OrderBookEvents>,
-}
-
-fn test() {
-    let event_factory = || ExchangeEventProducer { event: None };
-    let mut builder = build_single_producer(1000, event_factory, BusySpin);
-    let (event_poller_1, builder) = builder.new_event_poller();
-    let (event_poller_2, builder) = builder.new_event_poller();
-    let mut producer = builder.build();
 }

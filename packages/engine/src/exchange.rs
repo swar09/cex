@@ -1,27 +1,31 @@
 use std::collections::HashMap;
 
-use crossbeam::channel::{Sender, TrySendError};
+use disruptor::{MultiConsumerBarrier, SingleProducer};
 use domain::{OrderIds, Symbol, Trades};
 use thiserror::Error;
 
-use crate::{commands::ExchangeCommand, events::OrderBookEvents, orderbook::OrderBook};
+use crate::{
+    commands::ExchangeCommand,
+    events::{EventDispatcher, ExchangeEvents, OrderBookEvents},
+    orderbook::OrderBook,
+};
 #[derive(Error, Debug)]
 pub enum ExchangeError {
     #[error("Channel send failed")]
-    ExchangeEventTrySendError(TrySendError<OrderBookEvents>),
+    ExchangeEventTrySendError(disruptor::RingBufferFull),
     #[error("Orderbook access failed")]
     OrderBookAccessError(Symbol),
 }
 pub struct Exchange {
     pub orderbooks: HashMap<Symbol, OrderBook>,
-    pub event_tx: Sender<OrderBookEvents>,
+    pub event_tx: EventDispatcher,
 }
 
 impl Exchange {
-    pub fn new(sender: Sender<OrderBookEvents>) -> Self {
+    pub fn new(p: SingleProducer<ExchangeEvents, MultiConsumerBarrier>) -> Self {
         Self {
-            orderbooks: HashMap::new(), // empty
-            event_tx: sender,           // sender
+            orderbooks: HashMap::new(),        // empty
+            event_tx: EventDispatcher::new(p), // sender
         }
     }
 
@@ -139,13 +143,19 @@ impl Exchange {
 
 #[cfg(test)]
 mod tests {
-    use crossbeam::channel::{Receiver, bounded};
+    use disruptor::{BusySpin, EventPoller, SingleProducerBarrier, build_single_producer};
     use domain::{NewOrder, OrderId, OrderType, Side};
 
     use super::*;
-    fn new_exchange() -> (Exchange, Receiver<OrderBookEvents>) {
-        let (s, r) = bounded(100);
-        (Exchange::new(s), r)
+
+    type TestEventPoller = EventPoller<ExchangeEvents, SingleProducerBarrier>;
+
+    fn new_exchange() -> (Exchange, TestEventPoller) {
+        let event_factory = || ExchangeEvents { event: None };
+        let builder = build_single_producer(1024, event_factory, BusySpin).with_multi_consumer();
+        let (event_poller, builder) = builder.new_event_poller();
+        let p = builder.build();
+        (Exchange::new(p), event_poller)
     }
 
     fn new_buy_fak(order_id: OrderId) -> NewOrder {
@@ -185,14 +195,22 @@ mod tests {
         }
     }
 
-    fn drain(r: &Receiver<OrderBookEvents>) -> Vec<OrderBookEvents> {
-        r.try_iter().collect()
+    fn drain(poller: &mut TestEventPoller) -> Vec<OrderBookEvents> {
+        let mut events = Vec::new();
+        while let Ok(mut guard) = poller.poll() {
+            for item in &mut guard {
+                if let Some(event) = &item.event {
+                    events.push(event.clone());
+                }
+            }
+        }
+        events
     }
 
     #[test]
     fn gtc_orders_cross_and_match() {
         const SYMBOL: Symbol = Symbol::BtcInr;
-        let (mut exchange, r) = new_exchange();
+        let (mut exchange, mut poller) = new_exchange();
         exchange.add_new_orderbook(SYMBOL);
 
         exchange
@@ -203,7 +221,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            drain(&r),
+            drain(&mut poller),
             vec![
                 OrderBookEvents::OrderAdded(SYMBOL, 1),
                 OrderBookEvents::OrderAdded(SYMBOL, 2),
@@ -216,20 +234,20 @@ mod tests {
     #[test]
     fn gtc_order_rests_when_no_counterparty() {
         const SYMBOL: Symbol = Symbol::BtcInr;
-        let (mut exchange, r) = new_exchange();
+        let (mut exchange, mut poller) = new_exchange();
         exchange.add_new_orderbook(SYMBOL);
 
         exchange
             .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_gtc(1)))
             .unwrap();
 
-        assert_eq!(drain(&r), vec![OrderBookEvents::OrderAdded(SYMBOL, 1)]);
+        assert_eq!(drain(&mut poller), vec![OrderBookEvents::OrderAdded(SYMBOL, 1)]);
     }
 
     #[test]
     fn fak_order_matches_immediately_when_crossable() {
         const SYMBOL: Symbol = Symbol::BtcInr;
-        let (mut exchange, r) = new_exchange();
+        let (mut exchange, mut poller) = new_exchange();
         exchange.add_new_orderbook(SYMBOL);
 
         exchange
@@ -239,7 +257,7 @@ mod tests {
             .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_sell_fak(2)))
             .unwrap();
 
-        let events = drain(&r);
+        let events = drain(&mut poller);
         assert!(events.contains(&OrderBookEvents::OrderAdded(SYMBOL, 1)));
         assert!(events.contains(&OrderBookEvents::OrderMatched(SYMBOL, 1, 100, 1)));
         assert!(events.contains(&OrderBookEvents::OrderMatched(SYMBOL, 2, 100, 1)));
@@ -248,45 +266,45 @@ mod tests {
     #[test]
     fn fak_order_rejected_when_nothing_to_cross() {
         const SYMBOL: Symbol = Symbol::BtcInr;
-        let (mut exchange, r) = new_exchange();
+        let (mut exchange, mut poller) = new_exchange();
         exchange.add_new_orderbook(SYMBOL);
 
         exchange
             .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_fak(1)))
             .unwrap();
 
-        assert_eq!(drain(&r), vec![OrderBookEvents::OrderRejected(SYMBOL, 1)]);
+        assert_eq!(drain(&mut poller), vec![OrderBookEvents::OrderRejected(SYMBOL, 1)]);
     }
 
     #[test]
     fn cancel_resting_order_emits_cancelled_event() {
         const SYMBOL: Symbol = Symbol::BtcInr;
-        let (mut exchange, r) = new_exchange();
+        let (mut exchange, mut poller) = new_exchange();
         exchange.add_new_orderbook(SYMBOL);
 
         exchange
             .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_gtc(1)))
             .unwrap();
-        drain(&r);
+        drain(&mut poller);
 
         exchange.handle_cmd(ExchangeCommand::CancelOrder(SYMBOL, 1)).unwrap();
-        assert_eq!(drain(&r), vec![OrderBookEvents::OrderCancelled(SYMBOL, 1)]);
+        assert_eq!(drain(&mut poller), vec![OrderBookEvents::OrderCancelled(SYMBOL, 1)]);
     }
 
     #[test]
     fn cancel_nonexistent_order_emits_nothing() {
         const SYMBOL: Symbol = Symbol::BtcInr;
-        let (mut exchange, r) = new_exchange();
+        let (mut exchange, mut poller) = new_exchange();
         exchange.add_new_orderbook(SYMBOL);
 
         exchange.handle_cmd(ExchangeCommand::CancelOrder(SYMBOL, 999)).unwrap();
-        assert_eq!(drain(&r), vec![]); // cancel_order returned false, no event sent
+        assert_eq!(drain(&mut poller), vec![]); // cancel_order returned false, no event sent
     }
 
     #[test]
     fn cancel_already_filled_order_does_not_recancel() {
         const SYMBOL: Symbol = Symbol::BtcInr;
-        let (mut exchange, r) = new_exchange();
+        let (mut exchange, mut poller) = new_exchange();
         exchange.add_new_orderbook(SYMBOL);
 
         exchange
@@ -295,15 +313,15 @@ mod tests {
         exchange
             .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_sell_gtc(2)))
             .unwrap();
-        drain(&r);
+        drain(&mut poller);
 
         exchange.handle_cmd(ExchangeCommand::CancelOrder(SYMBOL, 1)).unwrap();
-        assert_eq!(drain(&r), vec![]);
+        assert_eq!(drain(&mut poller), vec![]);
     }
 
     #[test]
     fn orderbooks_are_isolated_per_symbol() {
-        let (mut exchange, r) = new_exchange();
+        let (mut exchange, mut poller) = new_exchange();
         exchange.add_new_orderbook(Symbol::BtcInr);
         exchange.add_new_orderbook(Symbol::EthInr);
 
@@ -315,7 +333,7 @@ mod tests {
             .handle_cmd(ExchangeCommand::AddNewOrder(Symbol::EthInr, new_sell_gtc(2)))
             .unwrap();
 
-        let events = drain(&r);
+        let events = drain(&mut poller);
         assert_eq!(
             events,
             vec![
@@ -328,7 +346,7 @@ mod tests {
 
     #[test]
     fn every_symbol_gets_its_own_working_book() {
-        let (mut exchange, r) = new_exchange();
+        let (mut exchange, mut poller) = new_exchange();
         let mut id: OrderId = 0;
         for symbol in Symbol::ALL.iter() {
             exchange.add_new_orderbook(*symbol);
@@ -342,7 +360,7 @@ mod tests {
             id += 1;
         }
 
-        let events = drain(&r);
+        let events = drain(&mut poller);
         let matched_count = events
             .iter()
             .filter(|e| matches!(e, OrderBookEvents::OrderMatched(..)))
@@ -351,3 +369,4 @@ mod tests {
         assert_eq!(matched_count, Symbol::ALL.len() * 2);
     }
 }
+
