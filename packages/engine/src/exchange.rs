@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-
+pub type Sequence = u64;
 use disruptor::{MultiConsumerBarrier, SingleProducer};
 use domain::{OrderIds, Symbol, Trades};
 use thiserror::Error;
@@ -19,6 +19,7 @@ pub enum ExchangeError {
 pub struct Exchange {
     pub orderbooks: HashMap<Symbol, OrderBook>,
     pub event_tx: EventDispatcher,
+    seqs: HashMap<Symbol, Sequence>,
 }
 
 impl Exchange {
@@ -26,7 +27,14 @@ impl Exchange {
         Self {
             orderbooks: HashMap::new(),        // empty
             event_tx: EventDispatcher::new(p), // sender
+            seqs: HashMap::new(),
         }
+    }
+
+    pub fn next_seq(&mut self, symbol: &Symbol) -> Sequence {
+        let seq = self.seqs.entry(*symbol).or_insert(0);
+        *seq += 1;
+        *seq
     }
 
     pub fn add_new_orderbook(&mut self, symbol: Symbol) {
@@ -44,16 +52,18 @@ impl Exchange {
                     .ok_or(ExchangeError::OrderBookAccessError(symbol))?;
                 match book.add_new_order(new_order) {
                     Some(trades) => {
+                        let seq = self.next_seq(&symbol);
                         self.event_tx
-                            .try_send(OrderBookEvent::OrderAdded(symbol, order_id))
+                            .try_send(OrderBookEvent::OrderAdded(seq, symbol, order_id))
                             .map_err(ExchangeError::ExchangeEventTrySendError)?;
 
                         self.handle_trades(trades, symbol)?;
                         Ok(())
                     },
                     None => {
+                        let seq = self.next_seq(&symbol);
                         self.event_tx
-                            .try_send(OrderBookEvent::OrderRejected(symbol, order_id))
+                            .try_send(OrderBookEvent::OrderRejected(seq, symbol, order_id))
                             .map_err(ExchangeError::ExchangeEventTrySendError)?;
                         Ok(())
                     },
@@ -65,8 +75,9 @@ impl Exchange {
                     .get_mut(&symbol)
                     .ok_or(ExchangeError::OrderBookAccessError(symbol))?;
                 if book.cancel_order(order_id) {
+                    let seq = self.next_seq(&symbol);
                     self.event_tx
-                        .try_send(OrderBookEvent::OrderCancelled(symbol, order_id))
+                        .try_send(OrderBookEvent::OrderCancelled(seq, symbol, order_id))
                         .map_err(ExchangeError::ExchangeEventTrySendError)?;
                 }
                 Ok(())
@@ -78,15 +89,17 @@ impl Exchange {
                     .ok_or(ExchangeError::OrderBookAccessError(symbol))?;
                 match book.modify_order(modify_order) {
                     Some(trades) => {
+                        let seq = self.next_seq(&symbol);
                         self.event_tx
-                            .try_send(OrderBookEvent::OrderModified(symbol, modify_order))
+                            .try_send(OrderBookEvent::OrderModified(seq, symbol, modify_order))
                             .map_err(ExchangeError::ExchangeEventTrySendError)?;
                         self.handle_trades(trades, symbol)?;
                         Ok(())
                     },
                     None => {
+                        let seq = self.next_seq(&symbol);
                         self.event_tx
-                            .try_send(OrderBookEvent::ModifyOrderRejected(symbol, modify_order))
+                            .try_send(OrderBookEvent::ModifyOrderRejected(seq, symbol, modify_order))
                             .map_err(ExchangeError::ExchangeEventTrySendError)?;
                         Ok(())
                     },
@@ -111,8 +124,9 @@ impl Exchange {
                     order_ids.push(order_id);
                 }
                 book.cancel_orders(order_ids.clone());
+                let seq = self.next_seq(&symbol);
                 self.event_tx
-                    .try_send(OrderBookEvent::OrdersExpired(symbol, order_ids))
+                    .try_send(OrderBookEvent::OrdersExpired(seq, symbol, order_ids))
                     .map_err(ExchangeError::ExchangeEventTrySendError)?;
                 Ok(())
             },
@@ -125,16 +139,18 @@ impl Exchange {
                 let order = trade.ask_trade;
                 (order.order_id, order.price, order.quantity)
             };
+            let seq = self.next_seq(&symbol);
             self.event_tx
-                .try_send(OrderBookEvent::OrderMatched(symbol, order_id, price, quantity))
+                .try_send(OrderBookEvent::OrderMatched(seq, symbol, order_id, price, quantity))
                 .map_err(ExchangeError::ExchangeEventTrySendError)?;
             // bid_trade
             let (order_id, price, quantity) = {
                 let order = trade.bid_trade;
                 (order.order_id, order.price, order.quantity)
             };
+            let seq = self.next_seq(&symbol);
             self.event_tx
-                .try_send(OrderBookEvent::OrderMatched(symbol, order_id, price, quantity))
+                .try_send(OrderBookEvent::OrderMatched(seq, symbol, order_id, price, quantity))
                 .map_err(ExchangeError::ExchangeEventTrySendError)?;
         }
         Ok(())
@@ -223,10 +239,10 @@ mod tests {
         assert_eq!(
             drain(&mut poller),
             vec![
-                OrderBookEvent::OrderAdded(SYMBOL, 1),
-                OrderBookEvent::OrderAdded(SYMBOL, 2),
-                OrderBookEvent::OrderMatched(SYMBOL, 2, 100, 1),
-                OrderBookEvent::OrderMatched(SYMBOL, 1, 100, 1),
+                OrderBookEvent::OrderAdded(1, SYMBOL, 1),
+                OrderBookEvent::OrderAdded(2, SYMBOL, 2),
+                OrderBookEvent::OrderMatched(3, SYMBOL, 2, 100, 1),
+                OrderBookEvent::OrderMatched(4, SYMBOL, 1, 100, 1),
             ]
         );
     }
@@ -241,7 +257,7 @@ mod tests {
             .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_gtc(1)))
             .unwrap();
 
-        assert_eq!(drain(&mut poller), vec![OrderBookEvent::OrderAdded(SYMBOL, 1)]);
+        assert_eq!(drain(&mut poller), vec![OrderBookEvent::OrderAdded(1, SYMBOL, 1)]);
     }
 
     #[test]
@@ -258,9 +274,9 @@ mod tests {
             .unwrap();
 
         let events = drain(&mut poller);
-        assert!(events.contains(&OrderBookEvent::OrderAdded(SYMBOL, 1)));
-        assert!(events.contains(&OrderBookEvent::OrderMatched(SYMBOL, 1, 100, 1)));
-        assert!(events.contains(&OrderBookEvent::OrderMatched(SYMBOL, 2, 100, 1)));
+        assert!(events.contains(&OrderBookEvent::OrderAdded(1, SYMBOL, 1)));
+        assert!(events.contains(&OrderBookEvent::OrderMatched(4, SYMBOL, 1, 100, 1)));
+        assert!(events.contains(&OrderBookEvent::OrderMatched(3, SYMBOL, 2, 100, 1)));
     }
 
     #[test]
@@ -273,7 +289,7 @@ mod tests {
             .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_fak(1)))
             .unwrap();
 
-        assert_eq!(drain(&mut poller), vec![OrderBookEvent::OrderRejected(SYMBOL, 1)]);
+        assert_eq!(drain(&mut poller), vec![OrderBookEvent::OrderRejected(1, SYMBOL, 1)]);
     }
 
     #[test]
@@ -288,7 +304,7 @@ mod tests {
         drain(&mut poller);
 
         exchange.handle_cmd(ExchangeCommand::CancelOrder(SYMBOL, 1)).unwrap();
-        assert_eq!(drain(&mut poller), vec![OrderBookEvent::OrderCancelled(SYMBOL, 1)]);
+        assert_eq!(drain(&mut poller), vec![OrderBookEvent::OrderCancelled(2, SYMBOL, 1)]);
     }
 
     #[test]
@@ -337,8 +353,8 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                OrderBookEvent::OrderAdded(Symbol::BtcInr, 1),
-                OrderBookEvent::OrderAdded(Symbol::EthInr, 2),
+                OrderBookEvent::OrderAdded(1, Symbol::BtcInr, 1),
+                OrderBookEvent::OrderAdded(1, Symbol::EthInr, 2),
             ]
         );
         assert!(!events.iter().any(|e| matches!(e, OrderBookEvent::OrderMatched(..))));

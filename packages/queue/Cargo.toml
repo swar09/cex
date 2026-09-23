@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-kafka = { version = "0.10.0", default-features = false, features = ["snappy", "gzip"] }
+rdkafka = { version = "0.39.0", features = ["cmake-build"] }

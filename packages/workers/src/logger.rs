@@ -1,39 +1,67 @@
-// ) -> Result<thread::JoinHandle<()>, std::io::Error> {
-//     thread::Builder::new()
-//         .name(format!("book-events-consumer-{:?}", symbol))
-//         .spawn(move || {
-//             loop {
-//                 for event in &event_rcv {
-//                     // TODO : finalize the Arch now , orderbook and exchange
-//                     // core engine is almost done
-//                 }
-//             }
-//         })
-// }
-
 use std::thread;
 
-use engine::{commands::CommandDispatcher, events::EventConsumer};
-
+use domain::{OrderId, Price, Quantity, Side};
+use engine::events::EventConsumer;
+use rdkafka::producer::{BaseProducer, BaseRecord};
+use serde::Serialize;
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderbookEventLog<'a> {
+    pub event_type: Option<String>,
+    pub sequence_no: Option<u64>,
+    pub symbol: &'a str,
+    pub order_id: Option<OrderId>,
+    pub price: Option<Price>,
+    pub quantity: Option<Quantity>,
+    pub side: Option<Side>,
+    pub order_ids: Option<Vec<u32>>,
+    pub error_code: Option<u64>,
+}
 pub fn orderbook_events_logger(
     mut consumer: EventConsumer,
-    _cmd_producer: CommandDispatcher,
+    producer: BaseProducer,
 ) -> Result<thread::JoinHandle<()>, std::io::Error> {
     thread::Builder::new()
         .name("orderbook-events-logger".to_string())
         .spawn(move || {
-            // match the event with symbol
-            // publish to kafka topic symbol.orderbook.logs
             loop {
                 let result = consumer.poll();
                 match result {
                     Ok(orderbook_events) => {
                         for event in orderbook_events {
-                            let _symbol = event.symbol().unwrap().as_str(); // handle error and publish to unknown topic
-                            // create a struct and serialize it
+                            let symbol = event.symbol().unwrap().as_str(); // handle error and publish to unknown topic
+                            let topic = "orderbook.events.logs".to_string();
+                            let payload = OrderbookEventLog {
+                                event_type: None,
+                                sequence_no: None,
+                                symbol,
+                                order_id: None,
+                                price: None,
+                                quantity: None,
+                                side: None,
+                                order_ids: None,
+                                error_code: None,
+                            };
+                            let payload_bytes = match serde_json::to_vec(&payload) {
+                                Ok(b) => b,
+                                Err(e) => {
+                                    eprintln!("[orderbook_events_logger] serialize error: {e}");
+                                    continue;
+                                },
+                            };
+                            let record = BaseRecord::to(&topic).key(symbol).payload(&payload_bytes);
+                            match producer.send(record) {
+                                Ok(_) => {
+                                    // no need to print result
+                                },
+                                Err(e) => {
+                                    eprintln!("[orderbook_events_logger] kafka error: {}", e.0);
+                                },
+                            }
                         }
                     },
-                    Err(_e) => {},
+                    Err(e) => {
+                        eprintln!("[orderbook_events_logger] ERROR : {e}")
+                    },
                 }
             }
         })

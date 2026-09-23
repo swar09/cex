@@ -1,8 +1,10 @@
+use serde::Serialize;
+
 pub type Price = i64;
 pub type Quantity = u32;
 pub type OrderId = u64;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub enum Side {
     Buy,
     Sell,
