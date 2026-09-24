@@ -15,18 +15,7 @@ pub fn orderbook_events_publisher(
                     Ok(orderbook_events) => {
                         for event in orderbook_events {
                             let symbol = event.symbol().unwrap().as_str(); // handle error and publish to unknown symbol
-                            // let seq = event.
-                            // let event_type = event
-                            let payload = OrderbookEventLog {
-                                event_type: None,
-                                sequence_no: None,
-                                symbol: Some(String::from(symbol)),
-                                order_id: None,
-                                price: None,
-                                quantity: None,
-                                order_ids: None,
-                                error_code: None,
-                            };
+                            let payload = event.to_log_data().unwrap(); // handle error 
                             match sender.blocking_send(payload) {
                                 Ok(_) => {},
                                 Err(e) => {

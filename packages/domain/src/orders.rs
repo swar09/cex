@@ -1,10 +1,12 @@
 use std::{cell::RefCell, rc::Rc};
 
+use serde::Serialize;
+
 use crate::types::{OrderId, Price, Quantity, Side};
 
 pub type OrderIds = Vec<OrderId>;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub enum OrderType {
     GoodTillCancel,
     FillAndKill,
