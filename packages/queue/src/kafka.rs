@@ -12,7 +12,6 @@ impl KafkaClient {
     }
 
     pub fn new_producer(&self) -> Result<BaseProducer, KafkaError> {
-        
         self.config.create()
     }
 }

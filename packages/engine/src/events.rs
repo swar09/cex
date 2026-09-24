@@ -1,7 +1,19 @@
 use disruptor::{EventPoller, MultiConsumerBarrier, Polling, Producer, SingleProducer, SingleProducerBarrier};
 use domain::{ModifyOrder, OrderId, OrderIds, Price, Quantity, Symbol};
+use serde::Serialize;
 
 use crate::exchange::Sequence;
+#[derive(Debug, Clone, Serialize)]
+pub struct OrderbookEventLog {
+    pub event_type: Option<String>,
+    pub sequence_no: Option<u64>,
+    pub symbol: Option<String>,
+    pub order_id: Option<OrderId>,
+    pub price: Option<Price>,
+    pub quantity: Option<Quantity>,
+    pub order_ids: Option<Vec<u32>>,
+    pub error_code: Option<u64>,
+}
 
 // orderbook events single producer multiple consumers
 #[derive(Clone, PartialEq, Debug)]
@@ -34,6 +46,28 @@ impl OrderBookEvent {
             | Self::MarketClosed(_, s) => Some(*s),
             Self::Error(..) => None,
         }
+    }
+
+    pub fn to_log_data(&self) -> Option<OrderbookEventLog> {
+        match self {
+            Self::OrderMatched(seq, symbol, order_id, price, quantity) => {
+                let event_type = self.as_str().to_string();
+                let symbol = symbol.as_str().to_string();
+                return Some(OrderbookEventLog {
+                    event_type: Some(event_type),
+                    sequence_no: Some(*seq),
+                    symbol: Some(symbol),
+                    order_id: Some(*order_id),
+                    price: Some(*price),
+                    quantity: Some(*quantity),
+                    order_ids: None,
+                    error_code: None,
+                });
+            },
+
+            _ => todo!(),
+        }
+        todo!()
     }
 
     pub fn is_error(&self) -> bool {
@@ -124,17 +158,17 @@ mod tests {
 
     use super::*;
 
-    fn create_event_pipeline(buffer_size: usize) -> (EventDispatcher, EventConsumer) {
-        let builder = build_single_producer(buffer_size, EventEnvelope::empty, BusySpin).with_multi_consumer();
-        let (poller, builder) = builder.new_event_poller();
-        let producer = builder.build();
-        (EventDispatcher::new(producer), EventConsumer::new(poller))
-    }
+    fn create_event_pipeline(buffer_size: usize) -> (EventDispatcher,
+EventConsumer) {         let builder = build_single_producer(buffer_size,
+EventEnvelope::empty, BusySpin).with_multi_consumer();         let (poller,
+builder) = builder.new_event_poller();         let producer =
+builder.build();         (EventDispatcher::new(producer),
+EventConsumer::new(poller))     }
 
     #[test]
     fn test_orderbook_event_symbol_extraction() {
-        let matched = OrderBookEvent::OrderMatched(1, Symbol::BtcInr, 1, 100, 10);
-        assert_eq!(matched.symbol(), Some(Symbol::BtcInr));
+        let matched = OrderBookEvent::OrderMatched(1, Symbol::BtcInr, 1, 100,
+10);         assert_eq!(matched.symbol(), Some(Symbol::BtcInr));
         assert!(!matched.is_error());
 
         let cancelled = OrderBookEvent::OrderCancelled(1, Symbol::EthInr, 2);
@@ -172,11 +206,12 @@ mod tests {
         );
         assert_eq!(mod_rejected.symbol(), Some(Symbol::BnbUsdt));
 
-        let expired = OrderBookEvent::OrdersExpired(1, Symbol::BtcUsdc, vec![7, 8]);
-        assert_eq!(expired.symbol(), Some(Symbol::BtcUsdc));
+        let expired = OrderBookEvent::OrdersExpired(1, Symbol::BtcUsdc,
+vec![7, 8]);         assert_eq!(expired.symbol(), Some(Symbol::BtcUsdc));
 
-        let partial = OrderBookEvent::OrderPartiallyFilled(1, Symbol::EthUsdc);
-        assert_eq!(partial.symbol(), Some(Symbol::EthUsdc));
+        let partial = OrderBookEvent::OrderPartiallyFilled(1,
+Symbol::EthUsdc);         assert_eq!(partial.symbol(),
+Some(Symbol::EthUsdc));
 
         let opened = OrderBookEvent::MarketOpened(1, Symbol::UsdtInr);
         assert_eq!(opened.symbol(), Some(Symbol::UsdtInr));
@@ -197,8 +232,8 @@ mod tests {
         let default_env = EventEnvelope::default();
         assert_eq!(default_env.event, None);
 
-        let with_event = EventEnvelope::new(OrderBookEvent::OrderAdded(1, Symbol::BtcInr, 10));
-        assert_eq!(
+        let with_event = EventEnvelope::new(OrderBookEvent::OrderAdded(1,
+Symbol::BtcInr, 10));         assert_eq!(
             with_event.event,
             Some(OrderBookEvent::OrderAdded(1, Symbol::BtcInr, 10))
         );
@@ -213,15 +248,16 @@ mod tests {
 
         // Publish events
         dispatcher.publish(OrderBookEvent::OrderAdded(1, Symbol::BtcInr, 1));
-        dispatcher.publish(OrderBookEvent::OrderMatched(2, Symbol::BtcInr, 1, 50_000, 2));
+        dispatcher.publish(OrderBookEvent::OrderMatched(2, Symbol::BtcInr, 1,
+50_000, 2));
 
-        let events = consumer.poll().expect("should successfully poll events");
-        assert_eq!(
+        let events = consumer.poll().expect("should successfully poll
+events");         assert_eq!(
             events,
             vec![
                 OrderBookEvent::OrderAdded(1, Symbol::BtcInr, 1),
-                OrderBookEvent::OrderMatched(2, Symbol::BtcInr, 1, 50_000, 2),
-            ]
+                OrderBookEvent::OrderMatched(2, Symbol::BtcInr, 1, 50_000,
+2),             ]
         );
     }
 
@@ -229,12 +265,12 @@ mod tests {
     fn test_event_dispatcher_try_send_success() {
         let (mut dispatcher, mut consumer) = create_event_pipeline(64);
 
-        let res = dispatcher.try_send(OrderBookEvent::OrderCancelled(1, Symbol::EthInr, 42));
-        assert!(res.is_ok());
+        let res = dispatcher.try_send(OrderBookEvent::OrderCancelled(1,
+Symbol::EthInr, 42));         assert!(res.is_ok());
 
         let events = consumer.poll().expect("should poll event");
-        assert_eq!(events, vec![OrderBookEvent::OrderCancelled(1, Symbol::EthInr, 42)]);
-    }
+        assert_eq!(events, vec![OrderBookEvent::OrderCancelled(1,
+Symbol::EthInr, 42)]);     }
 
     #[test]
     fn test_event_dispatcher_try_send_buffer_full() {
@@ -242,12 +278,12 @@ mod tests {
 
         // Fill ring buffer completely without polling
         for i in 0..8 {
-            let res = dispatcher.try_send(OrderBookEvent::OrderAdded(i as u64, Symbol::BtcInr, i));
-            assert!(res.is_ok());
+            let res = dispatcher.try_send(OrderBookEvent::OrderAdded(i,
+Symbol::BtcInr, i));             assert!(res.is_ok());
         }
 
         // 9th send must fail with RingBufferFull
-        let overflow = dispatcher.try_send(OrderBookEvent::OrderAdded(8, Symbol::BtcInr, 999));
-        assert_eq!(overflow, Err(disruptor::RingBufferFull));
-    }
+        let overflow = dispatcher.try_send(OrderBookEvent::OrderAdded(8,
+Symbol::BtcInr, 999));         assert_eq!(overflow,
+Err(disruptor::RingBufferFull));     }
 }

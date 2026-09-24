@@ -5,10 +5,10 @@ use engine::events::EventConsumer;
 use rdkafka::producer::{BaseProducer, BaseRecord};
 use serde::Serialize;
 #[derive(Debug, Clone, Serialize)]
-pub struct OrderbookEventLog<'a> {
+pub struct OrderbookEventLog {
     pub event_type: Option<String>,
     pub sequence_no: Option<u64>,
-    pub symbol: &'a str,
+    pub symbol: String,
     pub order_id: Option<OrderId>,
     pub price: Option<Price>,
     pub quantity: Option<Quantity>,
@@ -16,10 +16,7 @@ pub struct OrderbookEventLog<'a> {
     pub order_ids: Option<Vec<u32>>,
     pub error_code: Option<u64>,
 }
-pub fn orderbook_events_logger(
-    mut consumer: EventConsumer,
-    producer: BaseProducer,
-) -> Result<thread::JoinHandle<()>, std::io::Error> {
+pub fn orderbook_events_logger(mut consumer: EventConsumer, producer: BaseProducer) -> thread::JoinHandle<()> {
     thread::Builder::new()
         .name("orderbook-events-logger".to_string())
         .spawn(move || {
@@ -33,7 +30,7 @@ pub fn orderbook_events_logger(
                             let payload = OrderbookEventLog {
                                 event_type: None,
                                 sequence_no: None,
-                                symbol,
+                                symbol: String::from(symbol),
                                 order_id: None,
                                 price: None,
                                 quantity: None,
@@ -65,4 +62,5 @@ pub fn orderbook_events_logger(
                 }
             }
         })
+        .expect("failed to spawn orderbook logs worker")
 }

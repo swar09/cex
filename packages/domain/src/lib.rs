@@ -1,4 +1,5 @@
 pub mod error;
+pub mod events;
 pub mod level;
 pub mod orders;
 pub mod symbol;
