@@ -357,7 +357,7 @@ mod tests {
         let expired = OrderBookEvent::OrdersExpired(1, Symbol::BtcUsdc, vec![7, 8]);
         assert_eq!(expired.symbol(), Some(Symbol::BtcUsdc));
 
-        let partial = OrderBookEvent::OrderPartiallyFilled(1, Symbol::EthUsdc , 0);
+        let partial = OrderBookEvent::OrderPartiallyFilled(1, Symbol::EthUsdc, 0);
         assert_eq!(partial.symbol(), Some(Symbol::EthUsdc));
 
         let opened = OrderBookEvent::MarketOpened(1, Symbol::UsdtInr);

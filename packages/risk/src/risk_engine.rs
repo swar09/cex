@@ -83,6 +83,7 @@ impl RiskEngine {
         self.wallets.get_mut(internal_id as usize)
     }
 
+    // func used in gateway
     pub fn check_and_pass() {}
     pub fn reserve() {}
     pub fn check_reserve() {}

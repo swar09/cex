@@ -7,7 +7,6 @@ edition = "2024"
 domain = { path = "../../packages/domain" }
 engine = { path = "../../packages/engine" }
 workers = { path = "../../packages/workers" }
-db = { path = "../../packages/db" }
 cache = { path = "../../packages/cache" }
 gateway = { path = "../../packages/gateway" }
 crossbeam = "0.8.5"

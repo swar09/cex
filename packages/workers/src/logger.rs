@@ -27,17 +27,7 @@ pub fn orderbook_events_logger(mut consumer: EventConsumer, producer: BaseProduc
                         for event in orderbook_events {
                             let symbol = event.symbol().unwrap().as_str(); // handle error and publish to unknown topic
                             let topic = "orderbook.events.logs".to_string();
-                            let payload = OrderbookEventLog {
-                                event_type: None,
-                                sequence_no: None,
-                                symbol: String::from(symbol),
-                                order_id: None,
-                                price: None,
-                                quantity: None,
-                                side: None,
-                                order_ids: None,
-                                error_code: None,
-                            };
+                            let payload = event.to_log_data().unwrap(); // handle error 
                             let payload_bytes = match serde_json::to_vec(&payload) {
                                 Ok(b) => b,
                                 Err(e) => {

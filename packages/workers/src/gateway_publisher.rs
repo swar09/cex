@@ -14,7 +14,7 @@ pub fn orderbook_events_publisher(
                 match result {
                     Ok(orderbook_events) => {
                         for event in orderbook_events {
-                            let symbol = event.symbol().unwrap().as_str(); // handle error and publish to unknown symbol
+                            let _symbol = event.symbol().unwrap().as_str(); // handle error and publish to unknown symbol
                             let payload = event.to_log_data().unwrap(); // handle error 
                             match sender.blocking_send(payload) {
                                 Ok(_) => {},
