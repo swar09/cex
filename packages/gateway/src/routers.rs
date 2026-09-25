@@ -9,7 +9,6 @@ use crate::{
 };
 
 pub async fn v1_auth_routes() -> Router<AppState> {
-    
     Router::<AppState>::new()
         .route("/login", post(login))
         .route("/logout", post(logout))
@@ -25,6 +24,5 @@ pub async fn v1_order_routes() -> Router<AppState> {
     router
 }
 pub async fn v1_health_routes() -> Router<AppState> {
-    
     Router::new().route("/health", get(health_check))
 }
