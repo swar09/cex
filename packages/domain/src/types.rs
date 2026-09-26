@@ -1,6 +1,6 @@
 use serde::Serialize;
 pub type AssetId = u64;
-pub type Price = i64;
+pub type Price = u64;
 pub type Quantity = u32;
 pub type OrderId = u64;
 

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use domain::{AssetId, Quantity};
+use domain::{AssetId, Order, Price, Quantity, Side};
 use parking_lot::Mutex;
 
 use crate::risk_engine::{
@@ -70,7 +70,7 @@ impl Holdings {
 
         true
     }
-    pub fn can_release_asset(&mut self, asset_id: AssetId, quantity: Quantity) -> bool {
+    pub fn can_release_asset(&self, asset_id: AssetId, quantity: Quantity) -> bool {
         let Some(reserved_asset_quantity) = self.reserved.get(&asset_id) else {
             return false;
         };
@@ -179,7 +179,7 @@ impl Account {
             true
         }
     }
-    pub fn can_release_reserve(&mut self, amount: Balance) -> bool {
+    pub fn can_release_reserve(&self, amount: Balance) -> bool {
         if !self.status.allows(AccountOpp::Release) {
             return false;
         }
@@ -188,16 +188,76 @@ impl Account {
         }
         self.reserved >= amount
     }
-    pub fn withdraw() { // TODO
+    pub fn withdraw(&mut self, amount: Balance) -> bool {
+        if !self.status.allows(AccountOpp::Withdraw) {
+            return false;
+        }
+        if amount > self.available_balance {
+            return false;
+        }
+        self.available_balance -= amount;
+        true
     }
-    pub fn can_withdraw() { // TODO
+    pub fn withdraw_reserve(&mut self, amount: Balance) -> bool {
+        if amount > self.reserved {
+            return false;
+        }
+        self.reserved -= amount;
+        true
     }
-    pub fn deposit() { // TODO
+    pub fn withdraw_reserve_asset(&mut self, asset_id: AssetId, quantity: Quantity) -> bool {
+        if !self.holdings.can_release_asset(asset_id, quantity) {
+            false
+        } else {
+            self.holdings.release_asset(asset_id, quantity)
+        }
     }
-    pub fn can_deposit() { // TODO
+    pub fn can_withdraw(&self, amount: Balance) -> bool {
+        if !self.status.allows(AccountOpp::Withdraw) {
+            return false;
+        }
+        if amount > self.available_balance {
+            return false;
+        }
+        true
+    }
+    pub fn deposit(&mut self, amount: Balance) -> bool {
+        if !self.status.allows(AccountOpp::Deposit) {
+            return false;
+        }
+        self.available_balance += amount;
+        true
+    }
+    pub fn can_deposit(&self) -> bool {
+        if !self.status.allows(AccountOpp::Deposit) {
+            return false;
+        }
+        true
     }
 
-    pub fn settle() { // TODO
+    pub fn can_settle(&self, price: Price, asset_id: AssetId, quantity: Quantity, side: Side) -> bool {
+        if !self.status.allows(AccountOpp::Settle) {
+            return false;
+        }
+
+        if side == Side::Buy {
+            let amount = price * quantity as u64;
+            self.can_release_reserve(amount)
+        } else {
+            self.holdings.can_release_asset(asset_id, quantity)
+        }
+    }
+    pub fn settle(&mut self, price: Price, asset_id: AssetId, quantity: Quantity, side: Side) -> bool {
+        if !self.status.allows(AccountOpp::Settle) {
+            return false;
+        }
+
+        if side == Side::Buy {
+            let amount = price * quantity as u64;
+            self.withdraw_reserve(amount)
+        } else {
+            self.withdraw_reserve_asset(asset_id, quantity)
+        }
     }
 }
 #[derive(Debug, Default)]
@@ -215,37 +275,40 @@ impl RiskEngine {
         }
     }
 
-    pub fn check_and_pass() { // TODO
+    pub fn check_and_pass(&mut self, user_id: ExternalUserId, asset_id: AssetId, order: Order) -> bool {
+        // TODO
+        let mut guard = self.accounts[user_id].lock();
+
+        // cases by order types
+
+        // order type == limit order
+
+        // sell order case
+        if order.side == Side::Sell {
+            // TODO : allows to reserve asset check must be done here
+            if !guard
+                .holdings
+                .can_reserve_asset(asset_id, order.get_remaining_quantity())
+            {
+                // cannot reserve asset
+                return false;
+            }
+        } else {
+            // buy order case
+            let amount = order.get_price() * order.get_remaining_quantity() as u64;
+            // checks are done in can reserve function
+            if !guard.can_reserve(amount) {
+                return false;
+            }
+        }
+
+        true
     }
-    pub fn reserve() { // TODO 
+    pub fn reserve(&mut self, _user_id: ExternalUserId, _asset_id: AssetId, _amount: Balance, _quantity: Quantity) { // TODO 
     }
-    pub fn check_reserve() { // TODO
+    pub fn check_reserve(&self, _user_id: ExternalUserId, _asset_id: AssetId, _amount: Balance, _quantity: Quantity) { // TODO
     }
-
-    // pub fn new_with_ids_balance(external_ids: Vec<ExternalUserId>, balance:
-    // Vec<Balance>) -> Self {     let len = external_ids.len();
-    //     let mut id_map: HashMap<ExternalUserId, InternalUserId> =
-    // HashMap::with_capacity(len);     let mut accounts =
-    // Vec::with_capacity(len);
-
-    //     for (internal_id, &external_id) in external_ids.iter().enumerate() {
-    //         id_map.insert(external_id, internal_id);
-    //         let available_balance = balance.get(internal_id).unwrap_or(&0);
-    //         let account = Account {
-    //             user_internal_id: internal_id,
-    //             available_balance: *available_balance,
-    //             reserved: 0,
-    //             status: AccountStatus::default(),
-    //             holdings: Holdings::default(),
-    //         };
-
-    //         accounts.push(account);
-    //     }
-
-    //     Self { id_map, accounts }
-    // }
-
-    // pub fn get_internal_id(&self, external_id: ExternalUserId) ->
-    // Option<InternalUserId> {     self.id_map.get(&external_id).copied()
-    // }
+    pub fn get_internal_id(&self, external_id: ExternalUserId) -> Option<InternalUserId> {
+        self.id_map.get(&external_id).copied()
+    }
 }
