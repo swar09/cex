@@ -56,6 +56,12 @@ pub struct Holdings {
     pub available: HashMap<AssetId, Quantity>,
 }
 impl Holdings {
+    pub fn new(asset_id: AssetId, quantity: Quantity) -> Self {
+        let reserved = HashMap::new();
+        let mut available = HashMap::new();
+        available.insert(asset_id, quantity);
+        Self { reserved, available }
+    }
     pub fn get_available_quantity(&self, asset_id: AssetId) -> Option<Quantity> {
         self.available.get(&asset_id).copied()
     }
@@ -63,6 +69,9 @@ impl Holdings {
         self.reserved.get(&asset_id).copied()
     }
     pub fn reserve_asset(&mut self, asset_id: AssetId, quantity: Quantity) -> bool {
+        if quantity == 0 {
+            return false;
+        }
         match self.available.get_mut(&asset_id) {
             Some(available_quantity) => {
                 if quantity > *available_quantity {
@@ -156,6 +165,15 @@ pub struct Account {
 }
 
 impl Account {
+    pub fn new_with_balance_and_holdings(int_id: InternalUserId, balance: Balance, holdings: Holdings) -> Self {
+        Self {
+            user_internal_id: int_id,
+            available_balance: balance,
+            reserved: 0,
+            status: AccountStatus::Active,
+            holdings,
+        }
+    }
     pub fn get_available_balance(&self) -> Option<Balance> {
         Some(self.available_balance)
     }
@@ -335,13 +353,26 @@ impl RiskEngine {
             accounts: Vec::new(),
         }
     }
-    // this constructor will be used  in production
-    // pub fn new_with_accounts() -> Self {
-    //     Self {
-    //         id_map: HashMap::new(),
-    //         accounts: Vec::new(),
-    //     }
-    // }
+
+    // this constructor will be used in production
+    pub fn new_with_accounts(
+        ext_user_ids: Vec<ExternalUserId>,
+        init_balances: Vec<Balance>,
+        init_holdings: Vec<(AssetId, Quantity)>,
+    ) -> Self {
+        let capacity = ext_user_ids.len();
+        let mut id_map = HashMap::with_capacity(capacity);
+        let mut accounts = Vec::with_capacity(capacity);
+        for (ext_id, index) in ext_user_ids.iter().enumerate() {
+            id_map.insert(ext_id, *index);
+            let holdings = Holdings::new(init_holdings[*index].0, init_holdings[*index].1);
+            let account = Account::new_with_balance_and_holdings(*index, init_balances[*index], holdings);
+            accounts.push(account);
+        }
+
+        Self { id_map, accounts }
+    }
+
     // if order failed / rejected by orderbook release assets/amount for next orders
     pub fn release(
         &mut self,
@@ -368,20 +399,18 @@ impl RiskEngine {
             },
             Side::Sell => {
                 let account = &mut self.accounts[user_id];
-                let Some(reserved_asset_quantity) = account.holdings.get_reserved_quantity(asset_id) else {
+                let Some(current_reserved_asset_quantity) = account.holdings.reserved.get_mut(&asset_id) else {
                     return false;
                 };
-                if quote_quantity > reserved_asset_quantity {
+
+                if quote_quantity > *current_reserved_asset_quantity {
                     return false;
                 }
-                let Some(current_reserved_quantity) = account.holdings.reserved.get_mut(&asset_id) else {
-                    return false;
-                };
                 let Some(current_available_quantity) = account.holdings.available.get_mut(&asset_id) else {
                     return false;
                 };
 
-                *current_reserved_quantity -= quote_quantity;
+                *current_reserved_asset_quantity -= quote_quantity;
                 *current_available_quantity += quote_quantity;
                 true
             },
@@ -401,9 +430,7 @@ impl RiskEngine {
             Side::Buy => {
                 let account = &mut self.accounts[user_id];
 
-                let Some(current_available_quantity) = account.holdings.available.get_mut(&asset_id) else {
-                    return false;
-                };
+                let current_available_quantity = account.holdings.available.entry(asset_id).or_insert(0);
                 let Some(debit_req_amount) = quote_price.checked_mul(quote_quantity as u64) else {
                     return false;
                 };
@@ -439,7 +466,7 @@ impl RiskEngine {
     }
     // check order if valid , reserve the funds/asset and return.
     pub fn check_and_reserve(&mut self, user_id: ExternalUserId, order: Order) -> bool {
-        self.check(user_id, order) || self.reserve(user_id, order)
+        self.check(user_id, order) && self.reserve(user_id, order)
     }
     // only check if order is valid or not
     pub fn check(&mut self, user_id: ExternalUserId, order: Order) -> bool {
@@ -517,48 +544,39 @@ mod tests {
     use super::*;
 
     fn setup_account(available_balance: Balance, reserved: Balance) -> Account {
-        Account {
-            user_internal_id: 1,
-            available_balance,
-            reserved,
-            status: AccountStatus::Active,
-            holdings: Holdings::default(),
-        }
+        let mut account = Account::new_with_balance_and_holdings(1, available_balance, Holdings::default());
+        account.reserved = reserved;
+        account
     }
 
     fn limit_order(order_id: OrderId, side: Side, price: Price, quantity: Quantity) -> Order {
         Order::new(order_id, side, price, quantity, OrderType::GoodTillCancel)
     }
 
+    fn holdings_with_reserved(asset_id: AssetId, available: Quantity, reserved: Quantity) -> Holdings {
+        let mut holdings = Holdings::new(asset_id, available);
+        holdings.reserved.insert(asset_id, reserved);
+        holdings
+    }
+
+    fn holdings_reserved(asset_id: AssetId, reserved: Quantity) -> Holdings {
+        let mut holdings = Holdings::default();
+        holdings.reserved.insert(asset_id, reserved);
+        holdings
+    }
+
     fn setup_engine(
         ext_user: ExternalUserId,
         available_balance: Balance,
         reserved: Balance,
+        holdings: Holdings,
     ) -> (RiskEngine, InternalUserId) {
         let mut engine = RiskEngine::new_empty();
         let internal_id = engine.get_internal_id(ext_user);
-        let mut account = setup_account(available_balance, reserved);
-        account.user_internal_id = internal_id;
+        let mut account = Account::new_with_balance_and_holdings(internal_id, available_balance, holdings);
+        account.reserved = reserved;
         engine.accounts.push(account);
         (engine, internal_id)
-    }
-
-    fn add_available_asset(
-        engine: &mut RiskEngine,
-        internal_id: InternalUserId,
-        asset_id: AssetId,
-        qty: Quantity,
-    ) {
-        engine.accounts[internal_id].holdings.available.insert(asset_id, qty);
-    }
-
-    fn add_reserved_asset(
-        engine: &mut RiskEngine,
-        internal_id: InternalUserId,
-        asset_id: AssetId,
-        qty: Quantity,
-    ) {
-        engine.accounts[internal_id].holdings.reserved.insert(asset_id, qty);
     }
 
     #[test]
@@ -1166,9 +1184,9 @@ mod tests {
         assert_eq!(id1, 0);
         assert_eq!(engine.get_internal_id(ext_user_1), 0);
 
-        let mut account = setup_account(500, 0);
-        account.user_internal_id = id1;
-        engine.accounts.push(account);
+        engine
+            .accounts
+            .push(Account::new_with_balance_and_holdings(id1, 500, Holdings::default()));
 
         let id2 = engine.get_internal_id(ext_user_2);
         assert_eq!(id2, 1);
@@ -1179,7 +1197,7 @@ mod tests {
     #[test]
     fn test_risk_engine_check_buy_order() {
         let ext_user = 10;
-        let (mut engine, internal_id) = setup_engine(ext_user, 1000, 100);
+        let (mut engine, internal_id) = setup_engine(ext_user, 1000, 100, Holdings::default());
 
         let valid_order = limit_order(1, Side::Buy, 100, 5);
         assert!(engine.check(ext_user, valid_order));
@@ -1210,12 +1228,14 @@ mod tests {
     #[test]
     fn test_risk_engine_check_sell_order() {
         let ext_user = 10;
-        let (mut engine, internal_id) = setup_engine(ext_user, 1000, 0);
-        add_available_asset(&mut engine, internal_id, 1, 50);
+        let (mut engine, internal_id) = setup_engine(ext_user, 1000, 0, Holdings::new(1, 50));
 
         let valid_order = limit_order(1, Side::Sell, 100, 30);
         assert!(engine.check(ext_user, valid_order));
-        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(1), Some(50));
+        assert_eq!(
+            engine.accounts[internal_id].holdings.get_available_quantity(1),
+            Some(50)
+        );
         assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(1), None);
 
         let too_much_order = limit_order(2, Side::Sell, 100, 51);
@@ -1228,7 +1248,7 @@ mod tests {
     #[test]
     fn test_risk_engine_reserve_buy_order() {
         let ext_user = 10;
-        let (mut engine, internal_id) = setup_engine(ext_user, 1000, 200);
+        let (mut engine, internal_id) = setup_engine(ext_user, 1000, 200, Holdings::default());
 
         let valid_order = limit_order(1, Side::Buy, 100, 4);
         assert!(engine.reserve(ext_user, valid_order));
@@ -1250,17 +1270,22 @@ mod tests {
     #[test]
     fn test_risk_engine_reserve_sell_order() {
         let ext_user = 10;
-        let (mut engine, internal_id) = setup_engine(ext_user, 1000, 0);
-        add_available_asset(&mut engine, internal_id, 1, 50);
+        let (mut engine, internal_id) = setup_engine(ext_user, 1000, 0, Holdings::new(1, 50));
 
         let valid_order = limit_order(1, Side::Sell, 100, 20);
         assert!(engine.reserve(ext_user, valid_order));
-        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(1), Some(30));
+        assert_eq!(
+            engine.accounts[internal_id].holdings.get_available_quantity(1),
+            Some(30)
+        );
         assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(1), Some(20));
 
         let too_much_order = limit_order(2, Side::Sell, 100, 35);
         assert!(!engine.reserve(ext_user, too_much_order));
-        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(1), Some(30));
+        assert_eq!(
+            engine.accounts[internal_id].holdings.get_available_quantity(1),
+            Some(30)
+        );
         assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(1), Some(20));
 
         let zero_qty_order = limit_order(3, Side::Sell, 100, 0);
@@ -1270,7 +1295,7 @@ mod tests {
     #[test]
     fn test_risk_engine_check_and_reserve_buy() {
         let ext_user = 10;
-        let (mut engine, internal_id) = setup_engine(ext_user, 1000, 0);
+        let (mut engine, internal_id) = setup_engine(ext_user, 1000, 0, Holdings::default());
 
         let order = limit_order(1, Side::Buy, 100, 4);
         assert!(engine.check_and_reserve(ext_user, order));
@@ -1286,23 +1311,28 @@ mod tests {
     #[test]
     fn test_risk_engine_check_and_reserve_sell() {
         let ext_user = 10;
-        let (mut engine, internal_id) = setup_engine(ext_user, 1000, 0);
-        add_available_asset(&mut engine, internal_id, 1, 50);
+        let (mut engine, internal_id) = setup_engine(ext_user, 1000, 0, Holdings::new(1, 50));
 
         let order = limit_order(1, Side::Sell, 100, 20);
         assert!(engine.check_and_reserve(ext_user, order));
-        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(1), Some(30));
+        assert_eq!(
+            engine.accounts[internal_id].holdings.get_available_quantity(1),
+            Some(30)
+        );
         assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(1), Some(20));
 
         let fail_order = limit_order(2, Side::Sell, 100, 35);
         assert!(!engine.check_and_reserve(ext_user, fail_order));
-        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(1), Some(30));
+        assert_eq!(
+            engine.accounts[internal_id].holdings.get_available_quantity(1),
+            Some(30)
+        );
         assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(1), Some(20));
     }
 
     #[test]
     fn test_risk_engine_release_buy() {
-        let (mut engine, internal_id) = setup_engine(1, 500, 300);
+        let (mut engine, internal_id) = setup_engine(1, 500, 300, Holdings::default());
 
         assert!(engine.release(internal_id, 1, 1, Side::Buy, 10, 20));
         assert_eq!(engine.accounts[internal_id].reserved, 100);
@@ -1317,39 +1347,42 @@ mod tests {
 
     #[test]
     fn test_risk_engine_release_sell() {
-        let (mut engine, internal_id) = setup_engine(1, 500, 0);
-        add_available_asset(&mut engine, internal_id, 1, 10);
-        add_reserved_asset(&mut engine, internal_id, 1, 30);
+        let (mut engine, internal_id) = setup_engine(1, 500, 0, holdings_with_reserved(1, 10, 30));
 
         assert!(engine.release(internal_id, 1, 1, Side::Sell, 10, 20));
         assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(1), Some(10));
-        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(1), Some(30));
+        assert_eq!(
+            engine.accounts[internal_id].holdings.get_available_quantity(1),
+            Some(30)
+        );
 
         assert!(!engine.release(internal_id, 2, 1, Side::Sell, 10, 15));
         assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(1), Some(10));
-        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(1), Some(30));
+        assert_eq!(
+            engine.accounts[internal_id].holdings.get_available_quantity(1),
+            Some(30)
+        );
 
         assert!(!engine.release(internal_id, 3, 999, Side::Sell, 10, 5));
     }
 
     #[test]
     fn test_risk_engine_release_sell_uninitialized_available() {
-        let (mut engine, internal_id) = setup_engine(1, 500, 0);
-        add_reserved_asset(&mut engine, internal_id, 2, 30);
+        let (mut engine, internal_id) = setup_engine(1, 500, 0, holdings_reserved(2, 30));
 
-        assert!(engine.release(internal_id, 1, 2, Side::Sell, 10, 20));
-        assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(2), Some(10));
-        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(2), Some(20));
+        assert!(!engine.release(internal_id, 1, 2, Side::Sell, 10, 20));
     }
 
     #[test]
     fn test_risk_engine_settle_buy() {
-        let (mut engine, internal_id) = setup_engine(1, 500, 300);
-        add_available_asset(&mut engine, internal_id, 1, 0);
+        let (mut engine, internal_id) = setup_engine(1, 500, 300, Holdings::new(1, 0));
 
         assert!(engine.settle(internal_id, 1, 1, Side::Buy, 10, 20));
         assert_eq!(engine.accounts[internal_id].reserved, 100);
-        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(1), Some(20));
+        assert_eq!(
+            engine.accounts[internal_id].holdings.get_available_quantity(1),
+            Some(20)
+        );
 
         assert!(!engine.settle(internal_id, 2, 1, Side::Buy, 10, 20));
         assert_eq!(engine.accounts[internal_id].reserved, 100);
@@ -1359,17 +1392,19 @@ mod tests {
 
     #[test]
     fn test_risk_engine_settle_buy_new_asset() {
-        let (mut engine, internal_id) = setup_engine(1, 500, 300);
+        let (mut engine, internal_id) = setup_engine(1, 500, 300, Holdings::default());
 
         assert!(engine.settle(internal_id, 1, 2, Side::Buy, 10, 20));
         assert_eq!(engine.accounts[internal_id].reserved, 100);
-        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(2), Some(20));
+        assert_eq!(
+            engine.accounts[internal_id].holdings.get_available_quantity(2),
+            Some(20)
+        );
     }
 
     #[test]
     fn test_risk_engine_settle_sell() {
-        let (mut engine, internal_id) = setup_engine(1, 500, 0);
-        add_reserved_asset(&mut engine, internal_id, 1, 30);
+        let (mut engine, internal_id) = setup_engine(1, 500, 0, holdings_reserved(1, 30));
 
         assert!(engine.settle(internal_id, 1, 1, Side::Sell, 10, 20));
         assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(1), Some(10));
