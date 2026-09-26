@@ -11,6 +11,7 @@ use domain::{
     orders::{ModifyOrder, OrderIds, OrderPointer, OrderType},
     types::{OrderId, Price, Side, Trade, TradeInfo, Trades},
 };
+use fxhash::FxHashMap;
 
 pub struct OrderEntry {
     pub order: OrderPointer,
@@ -19,12 +20,12 @@ pub struct OrderEntry {
     pub slab_key: usize,
 }
 
-pub type Orders = HashMap<OrderId, OrderEntry>;
+pub type Orders = FxHashMap<OrderId, OrderEntry>;
 
 pub struct OrderBook {
     pub asks: BTreeMap<Price, PriceLevel>,          // lowest price first
     pub bids: BTreeMap<Reverse<Price>, PriceLevel>, // highest price first
-    pub orders: HashMap<OrderId, OrderEntry>,
+    pub orders: FxHashMap<OrderId, OrderEntry>,
     pub data: HashMap<Price, LevelData>,
 }
 
@@ -42,7 +43,7 @@ impl OrderBook {
         Self {
             bids: BTreeMap::new(),
             asks: BTreeMap::new(),
-            orders: HashMap::new(),
+            orders: FxHashMap::default(),
             data: HashMap::new(),
             // sender: s,
         }
@@ -83,7 +84,7 @@ impl OrderBook {
     }
 
     pub fn match_orders(&mut self) -> Trades {
-        let mut trades: Trades = Vec::with_capacity(self.orders.len());
+        let mut trades: Trades = Trades::new();
 
         loop {
             if self.bids.is_empty() || self.asks.is_empty() {
@@ -98,7 +99,7 @@ impl OrderBook {
             }
 
             while !self.bids.is_empty() && !self.asks.is_empty() {
-                let (bid_filled, bid_order_id, ask_filled, ask_order_id, quantity) = {
+                let (bid_filled, bid_order_id, bid_user_id, ask_filled, ask_order_id, ask_user_id, quantity) = {
                     let (_, bid_level) = self.bids.first_key_value().expect("bids empty check above");
                     let (_, ask_level) = self.asks.first_key_value().expect("asks empty check above");
 
@@ -113,8 +114,10 @@ impl OrderBook {
                     (
                         bid.is_filled(),
                         bid.get_order_id(),
+                        bid.get_user_id(),
                         ask.is_filled(),
                         ask.get_order_id(),
+                        ask.get_user_id(),
                         quantity,
                     )
                 };
@@ -124,11 +127,13 @@ impl OrderBook {
                 trades.push(Trade {
                     bid_trade: TradeInfo {
                         order_id: bid_order_id,
+                        user_id: bid_user_id,
                         price: bid_price,
                         quantity,
                     },
                     ask_trade: TradeInfo {
                         order_id: ask_order_id,
+                        user_id: ask_user_id,
                         price: ask_price,
                         quantity,
                     },
@@ -197,14 +202,7 @@ impl OrderBook {
     }
 
     pub fn add_new_order(&mut self, order: NewOrder) -> Option<Trades> {
-        let order_pointer = Rc::new(RefCell::new(Order {
-            order_type: order.order_type,
-            order_id: order.order_id,
-            side: order.side,
-            price: order.price,
-            initial_quantity: order.quantity,
-            remaining_quantity: order.quantity,
-        }));
+        let order_pointer = Rc::new(RefCell::new(Order::from(order)));
         self.add_order(order_pointer)
     }
 
@@ -397,12 +395,14 @@ mod tests {
 
     fn make_order(id: OrderId, side: Side, price: Price, qty: Quantity, order_type: OrderType) -> OrderPointer {
         Rc::new(RefCell::new(Order {
-            order_type,
             order_id: id,
-            side,
+            user_id: 1,
+            asset_id: 1,
             price: Some(price),
             initial_quantity: qty,
             remaining_quantity: qty,
+            order_type,
+            side,
         }))
     }
 

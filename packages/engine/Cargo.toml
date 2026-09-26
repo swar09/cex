@@ -5,9 +5,12 @@ edition = "2024"
 
 [dependencies]
 domain = { path = "../domain" }
+risk = { path = "../risk" }
 chrono = "0.4.45"
 thiserror = "2.0.20"
 crossbeam = "0.8.5"
 core_affinity = "0.8.3"
 disruptor = "4.4.0"
 serde = "1.0.229"
+smallvec = { version = "1.13", features = ["serde"] }
+fxhash = "0.2.1"

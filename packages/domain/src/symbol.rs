@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::types::AssetId;
+
 #[derive(Copy, Clone, Serialize, Deserialize, PartialEq, Hash, Eq, Debug)]
 pub enum Symbol {
     // INR Markets
@@ -101,23 +103,31 @@ impl Symbol {
 }
 
 #[derive(Copy, Clone, Serialize, Deserialize, PartialEq, Hash, Eq, Debug)]
+#[repr(u64)]
 pub enum Currency {
     // All are in there smallest units
     // eg 1 dollars = 100 cents , price will be in cents
     #[serde(rename = "USDT")]
-    Usdt,
+    Usdt = 1,
     #[serde(rename = "BTC")]
-    Btc,
+    Btc = 2,
     #[serde(rename = "ETH")]
-    Eth,
+    Eth = 3,
     #[serde(rename = "SOL")]
-    Sol,
+    Sol = 4,
     #[serde(rename = "Inr")]
-    Inr,
+    Inr = 5,
     #[serde(rename = "BNB")]
-    Bnb,
+    Bnb = 6,
     #[serde(rename = "XRP")]
-    Xrp,
+    Xrp = 7,
     #[serde(rename = "USDC")]
-    Usdc,
+    Usdc = 8,
+}
+
+impl Currency {
+    #[inline(always)]
+    pub const fn asset_id(&self) -> AssetId {
+        *self as AssetId
+    }
 }

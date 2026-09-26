@@ -113,8 +113,10 @@ mod tests {
 
     fn sample_new_order(order_id: OrderId) -> NewOrder {
         NewOrder {
-            order_type: OrderType::GoodTillCancel,
             order_id,
+            user_id: 1,
+            asset_id: 1,
+            order_type: OrderType::GoodTillCancel,
             side: Side::Buy,
             price: Some(100),
             quantity: 5,

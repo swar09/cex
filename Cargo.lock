@@ -118,6 +118,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
+name = "byteorder"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
+
+[[package]]
 name = "bytes"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -302,9 +308,11 @@ name = "domain"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "fxhash",
  "rand",
  "serde",
  "slab",
+ "smallvec",
  "thiserror 2.0.21",
 ]
 
@@ -317,7 +325,10 @@ dependencies = [
  "crossbeam",
  "disruptor",
  "domain",
+ "fxhash",
+ "risk",
  "serde",
+ "smallvec",
  "thiserror 2.0.21",
 ]
 
@@ -406,6 +417,15 @@ dependencies = [
  "futures-task",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "fxhash"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c31b6d751ae2c7f11320402d34e41349dd1016f8d5d45e48c4312bc8625af50c"
+dependencies = [
+ "byteorder",
 ]
 
 [[package]]
@@ -955,6 +975,7 @@ name = "risk"
 version = "0.1.0"
 dependencies = [
  "domain",
+ "fxhash",
 ]
 
 [[package]]
@@ -1070,6 +1091,9 @@ name = "smallvec"
 version = "1.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9395f0f0eee849a9b707b2f06bb92a6a422090e2123bb2ef8e87a0e61892a8e"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "socket2"

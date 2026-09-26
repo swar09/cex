@@ -2,7 +2,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use serde::Serialize;
 
-use crate::types::{OrderId, Price, Quantity, Side};
+use crate::types::{AssetId, OrderId, Price, Quantity, Side, UserId};
 
 pub type OrderIds = Vec<OrderId>;
 
@@ -19,50 +19,79 @@ pub type OrderPointer = Rc<RefCell<Order>>;
 
 #[derive(Debug, Copy, Clone)]
 pub struct Order {
-    pub order_type: OrderType,
     pub order_id: OrderId,
-    pub side: Side,
+    pub user_id: UserId,
+    pub asset_id: AssetId,
     pub price: Option<Price>,
     pub initial_quantity: Quantity,
     pub remaining_quantity: Quantity,
+    pub order_type: OrderType,
+    pub side: Side,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct NewOrder {
-    pub order_type: OrderType,
     pub order_id: OrderId,
-    pub side: Side,
+    pub user_id: UserId,
+    pub asset_id: AssetId,
     pub price: Option<Price>,
     pub quantity: Quantity,
+    pub order_type: OrderType,
+    pub side: Side,
 }
 
 impl Order {
-    pub fn new(order_id: OrderId, side: Side, price: Price, quantity: Quantity, order_type: OrderType) -> Self {
+    pub fn new(
+        order_id: OrderId,
+        user_id: UserId,
+        asset_id: AssetId,
+        side: Side,
+        price: Price,
+        quantity: Quantity,
+        order_type: OrderType,
+    ) -> Self {
         Self {
-            order_type,
             order_id,
-            side,
+            user_id,
+            asset_id,
             price: Some(price),
             initial_quantity: quantity,
             remaining_quantity: quantity,
+            order_type,
+            side,
         }
     }
 
-    pub fn new_market_order(order_id: OrderId, side: Side, quantity: Quantity, _order_type: OrderType) -> Self {
+    pub fn new_market_order(
+        order_id: OrderId,
+        user_id: UserId,
+        asset_id: AssetId,
+        side: Side,
+        quantity: Quantity,
+        _order_type: OrderType,
+    ) -> Self {
         let order_type = OrderType::Market;
         let price = None;
         Self {
-            order_type,
             order_id,
-            side,
+            user_id,
+            asset_id,
             price,
             initial_quantity: quantity,
             remaining_quantity: quantity,
+            order_type,
+            side,
         }
     }
 
     pub fn get_order_id(&self) -> OrderId {
         self.order_id
+    }
+    pub fn get_user_id(&self) -> UserId {
+        self.user_id
+    }
+    pub fn get_asset_id(&self) -> AssetId {
+        self.asset_id
     }
     pub fn get_side(&self) -> Side {
         self.side
@@ -128,13 +157,30 @@ impl ModifyOrder {
 
     pub fn to_order_pointer(&self, order_type: OrderType) -> OrderPointer {
         let order = Order {
-            order_type,
-            side: self.get_side(),
             order_id: self.get_order_id(),
+            user_id: 0,
+            asset_id: 0,
             price: Some(self.get_price()),
             initial_quantity: self.get_quantity(),
             remaining_quantity: self.get_quantity(),
+            order_type,
+            side: self.get_side(),
         };
         Rc::new(RefCell::new(order))
+    }
+}
+
+impl From<NewOrder> for Order {
+    fn from(new_order: NewOrder) -> Self {
+        Self {
+            order_id: new_order.order_id,
+            user_id: new_order.user_id,
+            asset_id: new_order.asset_id,
+            price: new_order.price,
+            initial_quantity: new_order.quantity,
+            remaining_quantity: new_order.quantity,
+            order_type: new_order.order_type,
+            side: new_order.side,
+        }
     }
 }

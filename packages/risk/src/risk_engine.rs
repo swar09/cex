@@ -1,6 +1,5 @@
-use std::collections::HashMap;
-
 use domain::{AssetId, Order, OrderId, OrderType, Price, Quantity, Side};
+use fxhash::FxHashMap;
 
 use crate::risk_engine::{
     AccountOpp::{Credit, Release, Settle, Withdraw},
@@ -52,13 +51,13 @@ impl AccountStatus {
 
 #[derive(Debug, Default)]
 pub struct Holdings {
-    pub reserved: HashMap<AssetId, Quantity>,
-    pub available: HashMap<AssetId, Quantity>,
+    pub reserved: FxHashMap<AssetId, Quantity>,
+    pub available: FxHashMap<AssetId, Quantity>,
 }
 impl Holdings {
     pub fn new(asset_id: AssetId, quantity: Quantity) -> Self {
-        let reserved = HashMap::new();
-        let mut available = HashMap::new();
+        let reserved = FxHashMap::default();
+        let mut available = FxHashMap::default();
         available.insert(asset_id, quantity);
         Self { reserved, available }
     }
@@ -341,7 +340,7 @@ impl Account {
 }
 #[derive(Debug, Default)]
 pub struct RiskEngine {
-    pub id_map: HashMap<ExternalUserId, InternalUserId>,
+    pub id_map: FxHashMap<ExternalUserId, InternalUserId>,
     // default currency is dollars and stored as cents
     pub accounts: Vec<Account>, // index by internal user ids
 }
@@ -349,7 +348,7 @@ pub struct RiskEngine {
 impl RiskEngine {
     pub fn new_empty() -> Self {
         Self {
-            id_map: HashMap::new(),
+            id_map: FxHashMap::default(),
             accounts: Vec::new(),
         }
     }
@@ -361,7 +360,7 @@ impl RiskEngine {
         init_holdings: Vec<(AssetId, Quantity)>,
     ) -> Self {
         let capacity = ext_user_ids.len();
-        let mut id_map = HashMap::with_capacity(capacity);
+        let mut id_map = FxHashMap::default();
         let mut accounts = Vec::with_capacity(capacity);
         for (ext_id, index) in ext_user_ids.iter().enumerate() {
             id_map.insert(ext_id, *index);
@@ -371,6 +370,14 @@ impl RiskEngine {
         }
 
         Self { id_map, accounts }
+    }
+
+    pub fn add_account(&mut self, ext_id: ExternalUserId, balance: Balance, holdings: Holdings) -> InternalUserId {
+        let int_id = self.accounts.len();
+        self.id_map.insert(ext_id, int_id);
+        self.accounts
+            .push(Account::new_with_balance_and_holdings(int_id, balance, holdings));
+        int_id
     }
 
     // if order failed / rejected by orderbook release assets/amount for next orders
@@ -470,8 +477,7 @@ impl RiskEngine {
     }
     // only check if order is valid or not
     pub fn check(&mut self, user_id: ExternalUserId, order: Order) -> bool {
-        // temp solution to avoid errors ;
-        let asset_id = 1;
+        let asset_id = order.asset_id;
 
         let order_type = order.order_type;
         if order_type == OrderType::Market {
@@ -487,6 +493,9 @@ impl RiskEngine {
         // means normal limit orders where price != None
 
         let id = self.get_internal_id(user_id);
+        if id >= self.accounts.len() {
+            return false;
+        }
         let account = &self.accounts[id];
         match order.side {
             Side::Buy => {
@@ -502,7 +511,7 @@ impl RiskEngine {
     }
     // only reserve, assumes that provided order is valid
     pub fn reserve(&mut self, user_id: ExternalUserId, order: Order) -> bool {
-        let asset_id = 1;
+        let asset_id = order.asset_id;
 
         let order_type = order.order_type;
         if order_type == OrderType::Market {
@@ -515,6 +524,9 @@ impl RiskEngine {
         }
 
         let id = self.get_internal_id(user_id);
+        if id >= self.accounts.len() {
+            return false;
+        }
         let account = &mut self.accounts[id];
 
         // order_type != Market
@@ -550,7 +562,7 @@ mod tests {
     }
 
     fn limit_order(order_id: OrderId, side: Side, price: Price, quantity: Quantity) -> Order {
-        Order::new(order_id, side, price, quantity, OrderType::GoodTillCancel)
+        Order::new(order_id, 1, 1, side, price, quantity, OrderType::GoodTillCancel)
     }
 
     fn holdings_with_reserved(asset_id: AssetId, available: Quantity, reserved: Quantity) -> Holdings {
