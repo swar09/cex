@@ -516,6 +516,51 @@ impl RiskEngine {
 mod tests {
     use super::*;
 
+    fn setup_account(available_balance: Balance, reserved: Balance) -> Account {
+        Account {
+            user_internal_id: 1,
+            available_balance,
+            reserved,
+            status: AccountStatus::Active,
+            holdings: Holdings::default(),
+        }
+    }
+
+    fn limit_order(order_id: OrderId, side: Side, price: Price, quantity: Quantity) -> Order {
+        Order::new(order_id, side, price, quantity, OrderType::GoodTillCancel)
+    }
+
+    fn setup_engine(
+        ext_user: ExternalUserId,
+        available_balance: Balance,
+        reserved: Balance,
+    ) -> (RiskEngine, InternalUserId) {
+        let mut engine = RiskEngine::new_empty();
+        let internal_id = engine.get_internal_id(ext_user);
+        let mut account = setup_account(available_balance, reserved);
+        account.user_internal_id = internal_id;
+        engine.accounts.push(account);
+        (engine, internal_id)
+    }
+
+    fn add_available_asset(
+        engine: &mut RiskEngine,
+        internal_id: InternalUserId,
+        asset_id: AssetId,
+        qty: Quantity,
+    ) {
+        engine.accounts[internal_id].holdings.available.insert(asset_id, qty);
+    }
+
+    fn add_reserved_asset(
+        engine: &mut RiskEngine,
+        internal_id: InternalUserId,
+        asset_id: AssetId,
+        qty: Quantity,
+    ) {
+        engine.accounts[internal_id].holdings.reserved.insert(asset_id, qty);
+    }
+
     #[test]
     fn test_holdings_get_available_and_reserved_quantity() {
         // checking that we can read available and reserved asset amounts correctly
@@ -656,13 +701,7 @@ mod tests {
     #[test]
     fn test_account_get_balances() {
         // check reading cash balances
-        let account = Account {
-            user_internal_id: 1,
-            available_balance: 1000,
-            reserved: 250,
-            status: AccountStatus::Active,
-            holdings: Holdings::default(),
-        };
+        let account = setup_account(1000, 250);
 
         assert_eq!(account.get_available_balance(), Some(1000));
         assert_eq!(account.get_reserved_balance(), Some(250));
@@ -671,13 +710,7 @@ mod tests {
     #[test]
     fn test_account_can_reserve() {
         // users can only lock money if active and they have enough free cash
-        let mut account = Account {
-            user_internal_id: 1,
-            available_balance: 500,
-            reserved: 100,
-            status: AccountStatus::Active,
-            holdings: Holdings::default(),
-        };
+        let mut account = setup_account(500, 100);
 
         assert!(!account.can_reserve(0));
         assert!(account.can_reserve(500));
@@ -697,13 +730,7 @@ mod tests {
     #[test]
     fn test_account_reserve() {
         // moves free cash into locked reserve for a buy order
-        let mut account = Account {
-            user_internal_id: 1,
-            available_balance: 500,
-            reserved: 100,
-            status: AccountStatus::Active,
-            holdings: Holdings::default(),
-        };
+        let mut account = setup_account(500, 100);
 
         assert!(!account.reserve(0));
         assert_eq!(account.available_balance, 500);
@@ -729,13 +756,7 @@ mod tests {
     #[test]
     fn test_account_can_release_reserve() {
         // checks if locked cash can be unlocked back to free cash
-        let mut account = Account {
-            user_internal_id: 1,
-            available_balance: 300,
-            reserved: 200,
-            status: AccountStatus::Active,
-            holdings: Holdings::default(),
-        };
+        let mut account = setup_account(300, 200);
 
         assert!(!account.can_release_reserve(0));
         assert!(account.can_release_reserve(200));
@@ -755,13 +776,7 @@ mod tests {
     #[test]
     fn test_account_release_reserve() {
         // unlocks cash when a buy order is cancelled
-        let mut account = Account {
-            user_internal_id: 1,
-            available_balance: 300,
-            reserved: 200,
-            status: AccountStatus::Active,
-            holdings: Holdings::default(),
-        };
+        let mut account = setup_account(300, 200);
 
         assert!(!account.release_reserve(0));
 
@@ -790,13 +805,7 @@ mod tests {
     fn test_account_can_withdraw() {
         // users can withdraw if active or closed, but not if frozen or in reduce only
         // risk state
-        let mut account = Account {
-            user_internal_id: 1,
-            available_balance: 400,
-            reserved: 100,
-            status: AccountStatus::Active,
-            holdings: Holdings::default(),
-        };
+        let mut account = setup_account(400, 100);
 
         assert!(!account.can_withdraw(0));
         assert!(account.can_withdraw(400));
@@ -816,13 +825,7 @@ mod tests {
     #[test]
     fn test_account_withdraw() {
         // taking cash out of the exchange
-        let mut account = Account {
-            user_internal_id: 1,
-            available_balance: 400,
-            reserved: 100,
-            status: AccountStatus::Active,
-            holdings: Holdings::default(),
-        };
+        let mut account = setup_account(400, 100);
 
         assert!(!account.withdraw(0));
         assert!(!account.withdraw(500));
@@ -848,13 +851,7 @@ mod tests {
     #[test]
     fn test_account_consume_reserve() {
         // removes locked cash after a buy trade executes
-        let mut account = Account {
-            user_internal_id: 1,
-            available_balance: 500,
-            reserved: 300,
-            status: AccountStatus::Active,
-            holdings: Holdings::default(),
-        };
+        let mut account = setup_account(500, 300);
 
         assert!(!account.consume_reserve(350));
         assert_eq!(account.reserved, 300);
@@ -869,13 +866,7 @@ mod tests {
     #[test]
     fn test_account_credit_amount() {
         // adding cash proceeds to the account after selling an asset
-        let mut account = Account {
-            user_internal_id: 1,
-            available_balance: 100,
-            reserved: 0,
-            status: AccountStatus::Active,
-            holdings: Holdings::default(),
-        };
+        let mut account = setup_account(100, 0);
 
         assert!(!account.credit_amount(0));
         assert!(!account.credit_amount(u64::MAX));
@@ -899,13 +890,7 @@ mod tests {
     #[test]
     fn test_account_can_deposit() {
         // only active accounts can deposit new money
-        let mut account = Account {
-            user_internal_id: 1,
-            available_balance: 100,
-            reserved: 0,
-            status: AccountStatus::Active,
-            holdings: Holdings::default(),
-        };
+        let mut account = setup_account(100, 0);
 
         assert!(account.can_deposit());
 
@@ -922,13 +907,7 @@ mod tests {
     #[test]
     fn test_account_deposit() {
         // adding new deposit money from a bank or crypto transfer
-        let mut account = Account {
-            user_internal_id: 1,
-            available_balance: 100,
-            reserved: 0,
-            status: AccountStatus::Active,
-            holdings: Holdings::default(),
-        };
+        let mut account = setup_account(100, 0);
 
         assert!(!account.deposit(0));
         assert!(!account.deposit(u64::MAX));
@@ -952,13 +931,7 @@ mod tests {
     #[test]
     fn test_account_can_settle_buy() {
         // checking if buyer has enough locked cash to pay for the fill
-        let mut account = Account {
-            user_internal_id: 1,
-            available_balance: 500,
-            reserved: 200,
-            status: AccountStatus::Active,
-            holdings: Holdings::default(),
-        };
+        let mut account = setup_account(500, 200);
 
         let price: Price = 10;
         let quantity: Quantity = 20;
@@ -983,13 +956,7 @@ mod tests {
     #[test]
     fn test_account_can_settle_sell() {
         // checking if seller has enough locked coins to deliver for the fill
-        let mut account = Account {
-            user_internal_id: 1,
-            available_balance: 500,
-            reserved: 300,
-            status: AccountStatus::Active,
-            holdings: Holdings::default(),
-        };
+        let mut account = setup_account(500, 300);
 
         let asset_id: AssetId = 5;
         let quantity: Quantity = 10;
@@ -1019,13 +986,7 @@ mod tests {
     fn test_account_settle_buy() {
         // buyer pays locked cash and receives the purchased coins into available
         // balance
-        let mut account = Account {
-            user_internal_id: 1,
-            available_balance: 500,
-            reserved: 300,
-            status: AccountStatus::Active,
-            holdings: Holdings::default(),
-        };
+        let mut account = setup_account(500, 300);
 
         let price: Price = 10;
         let quantity: Quantity = 20;
@@ -1063,13 +1024,7 @@ mod tests {
     fn test_account_settle_sell() {
         // seller delivers locked coins and receives cash proceeds into available
         // balance
-        let mut account = Account {
-            user_internal_id: 1,
-            available_balance: 500,
-            reserved: 300,
-            status: AccountStatus::Active,
-            holdings: Holdings::default(),
-        };
+        let mut account = setup_account(500, 300);
 
         let asset_id: AssetId = 5;
         let price: Price = 10;
@@ -1132,13 +1087,7 @@ mod tests {
     #[test]
     fn test_overflow_account_balance_methods() {
         // checking that giving huge money amounts to cash methods does not panic
-        let mut account = Account {
-            user_internal_id: 1,
-            available_balance: 500,
-            reserved: 300,
-            status: AccountStatus::Active,
-            holdings: Holdings::default(),
-        };
+        let mut account = setup_account(500, 300);
 
         // locking more money than exists in the universe should safely return false
         // without panicking
@@ -1171,13 +1120,7 @@ mod tests {
     fn test_overflow_settle_and_can_settle_calculations() {
         // checking that extreme prices and quantities during trade settlement do not
         // crash the engine
-        let mut account = Account {
-            user_internal_id: 1,
-            available_balance: 500,
-            reserved: 300,
-            status: AccountStatus::Active,
-            holdings: Holdings::default(),
-        };
+        let mut account = setup_account(500, 300);
 
         let asset_id = 1;
         account.holdings.reserved.insert(asset_id, 25);
@@ -1204,5 +1147,238 @@ mod tests {
         assert_eq!(account.reserved, 300);
         assert_eq!(account.available_balance, 500);
         assert_eq!(account.holdings.get_reserved_quantity(asset_id), Some(25));
+    }
+
+    #[test]
+    fn test_risk_engine_new_empty() {
+        let engine = RiskEngine::new_empty();
+        assert!(engine.id_map.is_empty());
+        assert!(engine.accounts.is_empty());
+    }
+
+    #[test]
+    fn test_risk_engine_get_internal_id() {
+        let mut engine = RiskEngine::new_empty();
+        let ext_user_1 = 1001;
+        let ext_user_2 = 1002;
+
+        let id1 = engine.get_internal_id(ext_user_1);
+        assert_eq!(id1, 0);
+        assert_eq!(engine.get_internal_id(ext_user_1), 0);
+
+        let mut account = setup_account(500, 0);
+        account.user_internal_id = id1;
+        engine.accounts.push(account);
+
+        let id2 = engine.get_internal_id(ext_user_2);
+        assert_eq!(id2, 1);
+        assert_eq!(engine.get_internal_id(ext_user_2), 1);
+        assert_eq!(engine.get_internal_id(ext_user_1), 0);
+    }
+
+    #[test]
+    fn test_risk_engine_check_buy_order() {
+        let ext_user = 10;
+        let (mut engine, internal_id) = setup_engine(ext_user, 1000, 100);
+
+        let valid_order = limit_order(1, Side::Buy, 100, 5);
+        assert!(engine.check(ext_user, valid_order));
+        assert_eq!(engine.accounts[internal_id].available_balance, 1000);
+        assert_eq!(engine.accounts[internal_id].reserved, 100);
+
+        let expensive_order = limit_order(2, Side::Buy, 200, 10);
+        assert!(!engine.check(ext_user, expensive_order));
+        assert_eq!(engine.accounts[internal_id].available_balance, 1000);
+        assert_eq!(engine.accounts[internal_id].reserved, 100);
+
+        let zero_qty_order = limit_order(3, Side::Buy, 100, 0);
+        assert!(!engine.check(ext_user, zero_qty_order));
+
+        let overflow_order = limit_order(4, Side::Buy, u64::MAX, 2);
+        assert!(!engine.check(ext_user, overflow_order));
+
+        engine.accounts[internal_id].status = AccountStatus::Frozen;
+        assert!(!engine.check(ext_user, valid_order));
+
+        engine.accounts[internal_id].status = AccountStatus::Closed;
+        assert!(!engine.check(ext_user, valid_order));
+
+        engine.accounts[internal_id].status = AccountStatus::ReduceOnly;
+        assert!(!engine.check(ext_user, valid_order));
+    }
+
+    #[test]
+    fn test_risk_engine_check_sell_order() {
+        let ext_user = 10;
+        let (mut engine, internal_id) = setup_engine(ext_user, 1000, 0);
+        add_available_asset(&mut engine, internal_id, 1, 50);
+
+        let valid_order = limit_order(1, Side::Sell, 100, 30);
+        assert!(engine.check(ext_user, valid_order));
+        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(1), Some(50));
+        assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(1), None);
+
+        let too_much_order = limit_order(2, Side::Sell, 100, 51);
+        assert!(!engine.check(ext_user, too_much_order));
+
+        let zero_qty_order = limit_order(3, Side::Sell, 100, 0);
+        assert!(!engine.check(ext_user, zero_qty_order));
+    }
+
+    #[test]
+    fn test_risk_engine_reserve_buy_order() {
+        let ext_user = 10;
+        let (mut engine, internal_id) = setup_engine(ext_user, 1000, 200);
+
+        let valid_order = limit_order(1, Side::Buy, 100, 4);
+        assert!(engine.reserve(ext_user, valid_order));
+        assert_eq!(engine.accounts[internal_id].available_balance, 600);
+        assert_eq!(engine.accounts[internal_id].reserved, 600);
+
+        let too_much_order = limit_order(2, Side::Buy, 100, 7);
+        assert!(!engine.reserve(ext_user, too_much_order));
+        assert_eq!(engine.accounts[internal_id].available_balance, 600);
+        assert_eq!(engine.accounts[internal_id].reserved, 600);
+
+        let overflow_order = limit_order(3, Side::Buy, u64::MAX, 2);
+        assert!(!engine.reserve(ext_user, overflow_order));
+
+        let zero_qty_order = limit_order(4, Side::Buy, 100, 0);
+        assert!(!engine.reserve(ext_user, zero_qty_order));
+    }
+
+    #[test]
+    fn test_risk_engine_reserve_sell_order() {
+        let ext_user = 10;
+        let (mut engine, internal_id) = setup_engine(ext_user, 1000, 0);
+        add_available_asset(&mut engine, internal_id, 1, 50);
+
+        let valid_order = limit_order(1, Side::Sell, 100, 20);
+        assert!(engine.reserve(ext_user, valid_order));
+        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(1), Some(30));
+        assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(1), Some(20));
+
+        let too_much_order = limit_order(2, Side::Sell, 100, 35);
+        assert!(!engine.reserve(ext_user, too_much_order));
+        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(1), Some(30));
+        assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(1), Some(20));
+
+        let zero_qty_order = limit_order(3, Side::Sell, 100, 0);
+        assert!(!engine.reserve(ext_user, zero_qty_order));
+    }
+
+    #[test]
+    fn test_risk_engine_check_and_reserve_buy() {
+        let ext_user = 10;
+        let (mut engine, internal_id) = setup_engine(ext_user, 1000, 0);
+
+        let order = limit_order(1, Side::Buy, 100, 4);
+        assert!(engine.check_and_reserve(ext_user, order));
+        assert_eq!(engine.accounts[internal_id].available_balance, 600);
+        assert_eq!(engine.accounts[internal_id].reserved, 400);
+
+        let fail_order = limit_order(2, Side::Buy, 100, 7);
+        assert!(!engine.check_and_reserve(ext_user, fail_order));
+        assert_eq!(engine.accounts[internal_id].available_balance, 600);
+        assert_eq!(engine.accounts[internal_id].reserved, 400);
+    }
+
+    #[test]
+    fn test_risk_engine_check_and_reserve_sell() {
+        let ext_user = 10;
+        let (mut engine, internal_id) = setup_engine(ext_user, 1000, 0);
+        add_available_asset(&mut engine, internal_id, 1, 50);
+
+        let order = limit_order(1, Side::Sell, 100, 20);
+        assert!(engine.check_and_reserve(ext_user, order));
+        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(1), Some(30));
+        assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(1), Some(20));
+
+        let fail_order = limit_order(2, Side::Sell, 100, 35);
+        assert!(!engine.check_and_reserve(ext_user, fail_order));
+        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(1), Some(30));
+        assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(1), Some(20));
+    }
+
+    #[test]
+    fn test_risk_engine_release_buy() {
+        let (mut engine, internal_id) = setup_engine(1, 500, 300);
+
+        assert!(engine.release(internal_id, 1, 1, Side::Buy, 10, 20));
+        assert_eq!(engine.accounts[internal_id].reserved, 100);
+        assert_eq!(engine.accounts[internal_id].available_balance, 700);
+
+        assert!(!engine.release(internal_id, 2, 1, Side::Buy, 10, 20));
+        assert_eq!(engine.accounts[internal_id].reserved, 100);
+        assert_eq!(engine.accounts[internal_id].available_balance, 700);
+
+        assert!(!engine.release(internal_id, 3, 1, Side::Buy, u64::MAX, 2));
+    }
+
+    #[test]
+    fn test_risk_engine_release_sell() {
+        let (mut engine, internal_id) = setup_engine(1, 500, 0);
+        add_available_asset(&mut engine, internal_id, 1, 10);
+        add_reserved_asset(&mut engine, internal_id, 1, 30);
+
+        assert!(engine.release(internal_id, 1, 1, Side::Sell, 10, 20));
+        assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(1), Some(10));
+        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(1), Some(30));
+
+        assert!(!engine.release(internal_id, 2, 1, Side::Sell, 10, 15));
+        assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(1), Some(10));
+        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(1), Some(30));
+
+        assert!(!engine.release(internal_id, 3, 999, Side::Sell, 10, 5));
+    }
+
+    #[test]
+    fn test_risk_engine_release_sell_uninitialized_available() {
+        let (mut engine, internal_id) = setup_engine(1, 500, 0);
+        add_reserved_asset(&mut engine, internal_id, 2, 30);
+
+        assert!(engine.release(internal_id, 1, 2, Side::Sell, 10, 20));
+        assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(2), Some(10));
+        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(2), Some(20));
+    }
+
+    #[test]
+    fn test_risk_engine_settle_buy() {
+        let (mut engine, internal_id) = setup_engine(1, 500, 300);
+        add_available_asset(&mut engine, internal_id, 1, 0);
+
+        assert!(engine.settle(internal_id, 1, 1, Side::Buy, 10, 20));
+        assert_eq!(engine.accounts[internal_id].reserved, 100);
+        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(1), Some(20));
+
+        assert!(!engine.settle(internal_id, 2, 1, Side::Buy, 10, 20));
+        assert_eq!(engine.accounts[internal_id].reserved, 100);
+
+        assert!(!engine.settle(internal_id, 3, 1, Side::Buy, u64::MAX, 2));
+    }
+
+    #[test]
+    fn test_risk_engine_settle_buy_new_asset() {
+        let (mut engine, internal_id) = setup_engine(1, 500, 300);
+
+        assert!(engine.settle(internal_id, 1, 2, Side::Buy, 10, 20));
+        assert_eq!(engine.accounts[internal_id].reserved, 100);
+        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(2), Some(20));
+    }
+
+    #[test]
+    fn test_risk_engine_settle_sell() {
+        let (mut engine, internal_id) = setup_engine(1, 500, 0);
+        add_reserved_asset(&mut engine, internal_id, 1, 30);
+
+        assert!(engine.settle(internal_id, 1, 1, Side::Sell, 10, 20));
+        assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(1), Some(10));
+        assert_eq!(engine.accounts[internal_id].available_balance, 700);
+
+        assert!(!engine.settle(internal_id, 2, 1, Side::Sell, 10, 15));
+        assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(1), Some(10));
+        assert_eq!(engine.accounts[internal_id].available_balance, 700);
+
+        assert!(!engine.settle(internal_id, 3, 1, Side::Sell, u64::MAX, 2));
     }
 }
