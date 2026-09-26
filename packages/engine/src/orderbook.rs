@@ -1,7 +1,7 @@
 use std::{
     cell::RefCell,
     cmp::{Reverse, min},
-    collections::{BTreeMap, HashMap},
+    collections::BTreeMap,
     rc::Rc,
 };
 
@@ -26,7 +26,7 @@ pub struct OrderBook {
     pub asks: BTreeMap<Price, PriceLevel>,          // lowest price first
     pub bids: BTreeMap<Reverse<Price>, PriceLevel>, // highest price first
     pub orders: FxHashMap<OrderId, OrderEntry>,
-    pub data: HashMap<Price, LevelData>,
+    pub data: FxHashMap<Price, LevelData>,
 }
 
 pub struct LevelData {
@@ -44,7 +44,7 @@ impl OrderBook {
             bids: BTreeMap::new(),
             asks: BTreeMap::new(),
             orders: FxHashMap::default(),
-            data: HashMap::new(),
+            data: FxHashMap::default(),
             // sender: s,
         }
     }
@@ -299,9 +299,22 @@ impl OrderBook {
             .orders
             .get(&modify_order.order_id)
             .expect("OrderEntry not empty exists check above");
-        let order_type = existing_order_entry.order.borrow().get_order_type();
+        let (order_type, user_id, asset_id) = {
+            let o = existing_order_entry.order.borrow();
+            (o.get_order_type(), o.user_id, o.asset_id)
+        };
         self.cancel_order(modify_order.order_id);
-        self.add_order(modify_order.to_order_pointer(order_type))
+        let order = Order {
+            order_id: modify_order.get_order_id(),
+            user_id,
+            asset_id,
+            price: Some(modify_order.get_price()),
+            initial_quantity: modify_order.get_quantity(),
+            remaining_quantity: modify_order.get_quantity(),
+            order_type,
+            side: modify_order.get_side(),
+        };
+        self.add_order(Rc::new(RefCell::new(order)))
     }
 
     pub fn cancel_orders(&mut self, order_ids: OrderIds) {

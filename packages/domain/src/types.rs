@@ -36,4 +36,4 @@ impl Trade {
     }
 }
 
-pub type Trades = SmallVec<[Trade; 8]>;
+pub type Trades = SmallVec<[Trade; 64]>;

@@ -390,6 +390,9 @@ impl RiskEngine {
         qutoe_price: Price,
         quote_quantity: Quantity,
     ) -> bool {
+        if user_id >= self.accounts.len() {
+            return false;
+        }
         match side {
             Side::Buy => {
                 let account = &mut self.accounts[user_id];
@@ -433,6 +436,9 @@ impl RiskEngine {
         quote_price: Price,
         quote_quantity: Quantity,
     ) -> bool {
+        if user_id >= self.accounts.len() {
+            return false;
+        }
         match side {
             Side::Buy => {
                 let account = &mut self.accounts[user_id];
@@ -481,12 +487,19 @@ impl RiskEngine {
 
         let order_type = order.order_type;
         if order_type == OrderType::Market {
-            todo!();
+            let id = self.get_internal_id(user_id);
+            if id >= self.accounts.len() {
+                return false;
+            }
+            let account = &self.accounts[id];
             // handle market order here cause this order has no price
             // price = none
             // let price = orderbook.get_last_match(); // write some methods later while
             // working on ordebrook
-            return true;
+            return match order.side {
+                Side::Buy => account.available_balance > 0,
+                Side::Sell => account.holdings.can_reserve_asset(asset_id, order.initial_quantity),
+            };
         }
 
         // order_type != Market
@@ -515,12 +528,19 @@ impl RiskEngine {
 
         let order_type = order.order_type;
         if order_type == OrderType::Market {
-            todo!();
+            let id = self.get_internal_id(user_id);
+            if id >= self.accounts.len() {
+                return false;
+            }
+            let account = &mut self.accounts[id];
             // handle market order here cause this order has no price
             // price = none
             // let price = orderbook.get_last_match(); // write some methods later while
             // working on ordebrook
-            return true;
+            return match order.side {
+                Side::Buy => account.reserve(account.available_balance),
+                Side::Sell => account.holdings.reserve_asset(asset_id, order.initial_quantity),
+            };
         }
 
         let id = self.get_internal_id(user_id);
