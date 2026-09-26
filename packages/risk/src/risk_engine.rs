@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use domain::{AssetId, Price, Quantity, Side};
+use domain::{AssetId, Order, OrderId, OrderType, Price, Quantity, Side};
 
 use crate::risk_engine::{
     AccountOpp::{Credit, Release, Settle, Withdraw},
@@ -329,49 +329,187 @@ pub struct RiskEngine {
 }
 
 impl RiskEngine {
-    // pub fn new_empty() -> Self {
+    pub fn new_empty() -> Self {
+        Self {
+            id_map: HashMap::new(),
+            accounts: Vec::new(),
+        }
+    }
+    // this constructor will be used  in production
+    // pub fn new_with_accounts() -> Self {
     //     Self {
     //         id_map: HashMap::new(),
     //         accounts: Vec::new(),
     //     }
     // }
+    // if order failed / rejected by orderbook release assets/amount for next orders
+    pub fn release(
+        &mut self,
+        user_id: InternalUserId,
+        _order_id: OrderId,
+        asset_id: AssetId,
+        side: Side,
+        qutoe_price: Price,
+        quote_quantity: Quantity,
+    ) -> bool {
+        match side {
+            Side::Buy => {
+                let account = &mut self.accounts[user_id];
 
-    // pub fn check_and_pass(&mut self, user_id: ExternalUserId, asset_id: AssetId,
-    // order: Order) -> bool {     // TODO
-    //     let guard = self.accounts[user_id].lock();
+                let Some(release_req_amount) = qutoe_price.checked_mul(quote_quantity as u64) else {
+                    return false;
+                };
+                if release_req_amount > account.reserved {
+                    return false;
+                }
+                account.reserved -= release_req_amount;
+                account.available_balance += release_req_amount;
+                true
+            },
+            Side::Sell => {
+                let account = &mut self.accounts[user_id];
+                let Some(reserved_asset_quantity) = account.holdings.get_reserved_quantity(asset_id) else {
+                    return false;
+                };
+                if quote_quantity > reserved_asset_quantity {
+                    return false;
+                }
+                let Some(current_reserved_quantity) = account.holdings.reserved.get_mut(&asset_id) else {
+                    return false;
+                };
+                let Some(current_available_quantity) = account.holdings.available.get_mut(&asset_id) else {
+                    return false;
+                };
 
-    //     // cases by order types
+                *current_reserved_quantity -= quote_quantity;
+                *current_available_quantity += quote_quantity;
+                true
+            },
+        }
+    }
+    // if order matched by orderbook settle reserved assets/amount for next orders
+    pub fn settle(
+        &mut self,
+        user_id: InternalUserId,
+        _order_id: OrderId,
+        asset_id: AssetId,
+        side: Side,
+        quote_price: Price,
+        quote_quantity: Quantity,
+    ) -> bool {
+        match side {
+            Side::Buy => {
+                let account = &mut self.accounts[user_id];
 
-    //     // order type == limit order
+                let Some(current_available_quantity) = account.holdings.available.get_mut(&asset_id) else {
+                    return false;
+                };
+                let Some(debit_req_amount) = quote_price.checked_mul(quote_quantity as u64) else {
+                    return false;
+                };
 
-    //     // sell order case
-    //     if order.side == Side::Sell {
-    //         // TODO : allows to reserve asset check must be done here
-    //         if !guard
-    //             .holdings
-    //             .can_reserve_asset(asset_id, order.get_remaining_quantity())
-    //         {
-    //             // cannot reserve asset
-    //             return false;
-    //         }
-    //     } else {
-    //         // buy order case
-    //         let amount = order.get_price() * order.get_remaining_quantity() as
-    // u64;         // checks are done in can reserve function
-    //         if !guard.can_reserve(amount) {
-    //             return false;
-    //         }
-    //     }
+                let reserved_amount = account.reserved;
+                if !(reserved_amount >= debit_req_amount) {
+                    // not possible i guess
+                    return false;
+                }
 
-    //     true
-    // }
-    // pub fn reserve(&mut self, _user_id: ExternalUserId, _asset_id: AssetId,
-    // _amount: Balance, _quantity: Quantity) { // todo }
-    // pub fn check_reserve(&self, _user_id: ExternalUserId, _asset_id: AssetId,
-    // _amount: Balance, _quantity: Quantity) { // todo }
-    // pub fn get_internal_id(&self, external_id: ExternalUserId) ->
-    // Option<InternalUserId> {     self.id_map.get(&external_id).copied()
-    // }
+                *current_available_quantity += quote_quantity;
+                account.reserved -= debit_req_amount;
+                true
+            },
+            Side::Sell => {
+                let account = &mut self.accounts[user_id];
+
+                let Some(credit_req_amount) = quote_price.checked_mul(quote_quantity as u64) else {
+                    return false;
+                };
+                let Some(account_reserved_assets) = account.holdings.reserved.get_mut(&asset_id) else {
+                    return false;
+                };
+                if quote_quantity > *account_reserved_assets {
+                    // not possible i guess
+                    return false;
+                }
+                *account_reserved_assets -= quote_quantity;
+                account.available_balance += credit_req_amount;
+                true
+            },
+        }
+    }
+    // check order if valid , reserve the funds/asset and return.
+    pub fn check_and_reserve(&mut self, user_id: ExternalUserId, order: Order) -> bool {
+        self.check(user_id, order) || self.reserve(user_id, order)
+    }
+    // only check if order is valid or not
+    pub fn check(&mut self, user_id: ExternalUserId, order: Order) -> bool {
+        // temp solution to avoid errors ;
+        let asset_id = 1;
+
+        let order_type = order.order_type;
+        if order_type == OrderType::Market {
+            todo!();
+            // handle market order here cause this order has no price
+            // price = none
+            // let price = orderbook.get_last_match(); // write some methods later while
+            // working on ordebrook
+            return true;
+        }
+
+        // order_type != Market
+        // means normal limit orders where price != None
+
+        let id = self.get_internal_id(user_id);
+        let account = &self.accounts[id];
+        match order.side {
+            Side::Buy => {
+                let Some(amount) = order.price.unwrap().checked_mul(order.initial_quantity as u64) else {
+                    // amount is invalid
+                    return false;
+                };
+                // return can reserve
+                account.can_reserve(amount)
+            },
+            Side::Sell => account.holdings.can_reserve_asset(asset_id, order.initial_quantity),
+        }
+    }
+    // only reserve, assumes that provided order is valid
+    pub fn reserve(&mut self, user_id: ExternalUserId, order: Order) -> bool {
+        let asset_id = 1;
+
+        let order_type = order.order_type;
+        if order_type == OrderType::Market {
+            todo!();
+            // handle market order here cause this order has no price
+            // price = none
+            // let price = orderbook.get_last_match(); // write some methods later while
+            // working on ordebrook
+            return true;
+        }
+
+        let id = self.get_internal_id(user_id);
+        let account = &mut self.accounts[id];
+
+        // order_type != Market
+        // means normal limit orders where price != None
+
+        match order.side {
+            Side::Buy => {
+                let Some(amount) = order.price.unwrap().checked_mul(order.initial_quantity as u64) else {
+                    // amount is invalid
+                    return false;
+                };
+                // return can reserve
+                account.reserve(amount)
+            },
+            Side::Sell => account.holdings.reserve_asset(asset_id, order.initial_quantity),
+        }
+    }
+
+    pub fn get_internal_id(&mut self, external_id: ExternalUserId) -> InternalUserId {
+        // if internal_id not found then insert id which will be self.accounts.len()
+        *self.id_map.entry(external_id).or_insert(self.accounts.len())
+    }
 }
 
 #[cfg(test)]
@@ -984,7 +1122,7 @@ mod tests {
         assert!(!holdings.release_asset(asset_id, u32::MAX));
         assert!(!holdings.consume_reserved_asset(asset_id, u32::MAX));
 
-        // crediting maximum allowed quantity into an empty asset slot should work
+        // crediting maximum allowed quantity into an empty asset slto should work
         // without overflow
         let new_asset = 2;
         assert!(holdings.credit_asset(new_asset, u32::MAX));
@@ -1018,7 +1156,7 @@ mod tests {
         assert!(!account.withdraw(u64::MAX));
         assert!(!account.consume_reserve(u64::MAX));
 
-        // depositing or crediting money that would push the total balance past the 64
+        // depositing or crediting money that would push the ttoal balance past the 64
         // bit maximum safely returns false
         assert!(!account.deposit(u64::MAX));
         assert!(!account.credit_amount(u64::MAX));

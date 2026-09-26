@@ -5,4 +5,3 @@ edition = "2024"
 
 [dependencies]
 domain = { path = "../domain" }
-parking_lot = "0.12.5"

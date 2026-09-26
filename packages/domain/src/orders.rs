@@ -17,7 +17,7 @@ pub enum OrderType {
 
 pub type OrderPointer = Rc<RefCell<Order>>;
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct Order {
     pub order_type: OrderType,
     pub order_id: OrderId,
