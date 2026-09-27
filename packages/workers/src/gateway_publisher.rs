@@ -1,10 +1,10 @@
-use std::thread;
+use std::{sync::Arc, thread};
 
 use engine::events::{EventConsumer, OrderbookEventLog};
-use tokio::sync::mpsc::Sender; // no dedicated spsc option
+use tokio::sync::broadcast::Sender;
 pub fn orderbook_events_publisher(
     mut consumer: EventConsumer,
-    sender: Sender<OrderbookEventLog>,
+    sender: Sender<Arc<OrderbookEventLog>>,
 ) -> thread::JoinHandle<()> {
     thread::Builder::new()
         .name("orderbook-events-gateway-publisher".to_string())
@@ -14,13 +14,12 @@ pub fn orderbook_events_publisher(
                 match result {
                     Ok(orderbook_events) => {
                         for event in orderbook_events {
-                            let _symbol = event.symbol().unwrap().as_str(); // handle error and publish to unknown symbol
-                            let payload = event.to_log_data().unwrap(); // handle error 
-                            // blocking send blocks this thread, its a bounded channel
-                            match sender.blocking_send(payload) {
+                            let payload = Arc::new(event.to_log_data().unwrap()); // handle error 
+
+                            match sender.send(payload) {
                                 Ok(_) => {},
                                 Err(e) => {
-                                    eprintln!("[orderbook-events-gateway-publisher] ERROR : {e}")
+                                    eprintln!("[orderbook-events-gateway-publisher] ERROR :{e}")
                                 },
                             }
                         }

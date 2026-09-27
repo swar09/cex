@@ -1,7 +1,7 @@
 use std::{thread, time::Duration};
 
 use chrono::{Duration as ChronoDuration, Utc};
-use crossbeam::channel::Sender;
+use crossbeam::channel::Sender; // TODO : replace with disruptor
 use domain::{OrderType, Symbol};
 use engine::commands::ExchangeCommand;
 

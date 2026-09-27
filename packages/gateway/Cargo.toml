@@ -4,8 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-axum = "0.8.9"
+axum = { version = "0.8.9", features = ["ws"] }
 cache = { version = "0.1.0", path = "../cache" }
 engine = { version = "0.1.0", path = "../engine" }
 domain = { version = "0.1.0", path = "../domain" }
 tokio = "1.53.1"
+future-utils = "0.12.1"
+futures-util = "0.3.34"
+serde_json = "1.0.151"
