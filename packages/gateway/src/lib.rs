@@ -1,3 +1,5 @@
+pub mod consumer;
+pub mod error;
 pub mod handlers;
 pub mod routers;
 pub mod types;

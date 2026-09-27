@@ -1,7 +1,7 @@
 pub type Sequence = u64;
 use disruptor::{MultiConsumerBarrier, SingleProducer};
 use domain::{AssetId, Order, OrderIds, Side, Symbol, Trades};
-use fxhash::FxHashMap;
+use fxhash::FxHashMap; // hardware optimized hasher function 
 use risk::risk_engine::{ExternalUserId, RiskEngine};
 use thiserror::Error;
 

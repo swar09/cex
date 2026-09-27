@@ -35,6 +35,9 @@ pub enum Symbol {
     // Fiat Stable Coin Market
     #[serde(rename = "INR-USDT")]
     InrUsdt,
+
+    #[serde(rename = "UNKNOWN")]
+    Unknown,
 }
 
 impl Symbol {
@@ -66,6 +69,7 @@ impl Symbol {
             Symbol::SolUsdt => "SOL-USDT",
             Symbol::UsdtInr => "USDT-INR",
             Symbol::XrpUsdt => "XRP-USDT",
+            Symbol::Unknown => "UNKNOWN",
         }
     }
     pub fn get_quantity_unit(&self) -> Currency {
@@ -82,6 +86,7 @@ impl Symbol {
             Symbol::SolUsdt => Currency::Sol,
             Symbol::UsdtInr => Currency::Usdt,
             Symbol::XrpUsdt => Currency::Xrp,
+            Symbol::Unknown => Currency::Unknown,
         }
     }
     pub fn get_price_unit(&self) -> Currency {
@@ -98,6 +103,7 @@ impl Symbol {
             Symbol::SolUsdt => Currency::Usdt,
             Symbol::UsdtInr => Currency::Inr,
             Symbol::XrpUsdt => Currency::Usdt,
+            Symbol::Unknown => Currency::Unknown,
         }
     }
 }
@@ -123,6 +129,9 @@ pub enum Currency {
     Xrp = 7,
     #[serde(rename = "USDC")]
     Usdc = 8,
+
+    #[serde(rename = "UNKNOWN")]
+    Unknown = 9,
 }
 
 impl Currency {

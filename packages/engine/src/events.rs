@@ -7,7 +7,7 @@ use crate::exchange::Sequence;
 pub struct OrderbookEventLog {
     pub event_type: Option<String>,
     pub sequence_no: Option<u64>,
-    pub symbol: Option<String>,
+    pub symbol: Option<Symbol>,
     pub order_id: Option<OrderId>,
     pub price: Option<Price>,
     pub quantity: Option<Quantity>,
@@ -54,11 +54,11 @@ impl OrderBookEvent {
         match self {
             Self::OrderMatched(seq, symbol, order_id, price, quantity) => {
                 let event_type = self.as_str().to_string();
-                let symbol = symbol.as_str().to_string();
+
                 Some(OrderbookEventLog {
                     event_type: Some(event_type),
                     sequence_no: Some(*seq),
-                    symbol: Some(symbol),
+                    symbol: Some(*symbol),
                     order_id: Some(*order_id),
                     price: Some(*price),
                     quantity: Some(*quantity),
@@ -71,11 +71,10 @@ impl OrderBookEvent {
 
             Self::OrderCancelled(seq, symbol, order_id) => {
                 let event_type = self.as_str().to_string();
-                let symbol = symbol.as_str().to_string();
                 Some(OrderbookEventLog {
                     event_type: Some(event_type),
                     sequence_no: Some(*seq),
-                    symbol: Some(symbol),
+                    symbol: Some(*symbol),
                     order_id: Some(*order_id),
                     order_type: None,
                     price: None,
@@ -88,11 +87,10 @@ impl OrderBookEvent {
 
             Self::OrderAdded(seq, symbol, order_id) => {
                 let event_type = self.as_str().to_string();
-                let symbol = symbol.as_str().to_string();
                 Some(OrderbookEventLog {
                     event_type: Some(event_type),
                     sequence_no: Some(*seq),
-                    symbol: Some(symbol),
+                    symbol: Some(*symbol),
                     order_id: Some(*order_id),
                     price: None,
                     quantity: None,
@@ -105,7 +103,6 @@ impl OrderBookEvent {
 
             Self::OrderModified(seq, symbol, modify_order) => {
                 let event_type = self.as_str().to_string();
-                let symbol = symbol.as_str().to_string();
 
                 let order_id = modify_order.get_order_id();
                 let price = modify_order.get_price();
@@ -116,7 +113,7 @@ impl OrderBookEvent {
                 Some(OrderbookEventLog {
                     event_type: Some(event_type),
                     sequence_no: Some(*seq),
-                    symbol: Some(symbol),
+                    symbol: Some(*symbol),
                     order_id: Some(order_id),
                     price: Some(price),
                     quantity: Some(quantity),
@@ -129,11 +126,10 @@ impl OrderBookEvent {
 
             Self::OrderRejected(seq, symbol, order_id) => {
                 let event_type = self.as_str().to_string();
-                let symbol = symbol.as_str().to_string();
                 Some(OrderbookEventLog {
                     event_type: Some(event_type),
                     sequence_no: Some(*seq),
-                    symbol: Some(symbol),
+                    symbol: Some(*symbol),
                     order_id: Some(*order_id),
                     order_type: None,
                     price: None,
@@ -146,7 +142,6 @@ impl OrderBookEvent {
 
             Self::ModifyOrderRejected(seq, symbol, modify_order) => {
                 let event_type = self.as_str().to_string();
-                let symbol = symbol.as_str().to_string();
 
                 let order_id = modify_order.get_order_id();
                 let price = modify_order.get_price();
@@ -157,7 +152,7 @@ impl OrderBookEvent {
                 Some(OrderbookEventLog {
                     event_type: Some(event_type),
                     sequence_no: Some(*seq),
-                    symbol: Some(symbol),
+                    symbol: Some(*symbol),
                     order_id: Some(order_id),
                     price: Some(price),
                     quantity: Some(quantity),
@@ -170,11 +165,10 @@ impl OrderBookEvent {
 
             Self::OrdersExpired(seq, symbol, order_ids) => {
                 let event_type = self.as_str().to_string();
-                let symbol = symbol.as_str().to_string();
                 Some(OrderbookEventLog {
                     event_type: Some(event_type),
                     sequence_no: Some(*seq),
-                    symbol: Some(symbol),
+                    symbol: Some(*symbol),
                     order_id: None,
                     price: None,
                     quantity: None,
@@ -188,11 +182,10 @@ impl OrderBookEvent {
             Self::OrderPartiallyFilled(seq, symbol, order_id) => {
                 // TODO
                 let event_type = self.as_str().to_string();
-                let symbol = symbol.as_str().to_string();
                 Some(OrderbookEventLog {
                     event_type: Some(event_type),
                     sequence_no: Some(*seq),
-                    symbol: Some(symbol),
+                    symbol: Some(*symbol),
                     order_id: Some(*order_id),
                     price: None,
                     quantity: None,

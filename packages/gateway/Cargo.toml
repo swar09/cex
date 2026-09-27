@@ -6,4 +6,6 @@ edition = "2024"
 [dependencies]
 axum = "0.8.9"
 cache = { version = "0.1.0", path = "../cache" }
+engine = { version = "0.1.0", path = "../engine" }
+domain = { version = "0.1.0", path = "../domain" }
 tokio = "1.53.1"
