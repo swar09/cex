@@ -5,13 +5,11 @@ use axum::{
 
 use crate::{
     AppState,
-    handlers::{cancel_order, create_new_order, get_order_by_id, health_check, login, logout, modify_order},
+    handlers::{cancel_order, get_order_by_id, health_check, login, logout, modify_order},
 };
 
 pub async fn v1_auth_routes() -> Router<AppState> {
-    Router::<AppState>::new()
-        .route("/login", post(login))
-        .route("/logout", post(logout))
+    Router::<AppState>::new().route("/login", post(login)).route("/logout", post(logout))
 }
 pub async fn v1_order_routes() -> Router<AppState> {
     let router = Router::new()

@@ -4,7 +4,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use domain::NewOrder;
-use engine::commands::ExchangeCommand;
 
 use crate::{
     AppState,
@@ -14,12 +13,12 @@ pub async fn health_check() -> Response {
     Json("ok").into_response()
 }
 
-pub async fn create_new_order(new_order_req: NewOrderReq, State(state): State<AppState>) -> Response {
+pub async fn create_new_order(new_order_req: NewOrderReq, State(_state): State<AppState>) -> Response {
     // validate jwt in the middleware
     // validate user account permissions
     // use helper fuctions
     let new_id = ext_order_id_genrator();
-    let new_order = NewOrder {
+    let _new_order = NewOrder {
         order_id: new_id,
         order_type: new_order_req.order_type,
         asset_id: new_order_req.asset_id,

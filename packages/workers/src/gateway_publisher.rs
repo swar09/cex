@@ -2,10 +2,7 @@ use std::{sync::Arc, thread};
 
 use engine::events::{EventConsumer, OrderbookEventLog};
 use tokio::sync::broadcast::Sender;
-pub fn orderbook_events_publisher(
-    mut consumer: EventConsumer,
-    sender: Sender<Arc<OrderbookEventLog>>,
-) -> thread::JoinHandle<()> {
+pub fn orderbook_events_publisher(mut consumer: EventConsumer, sender: Sender<Arc<OrderbookEventLog>>) -> thread::JoinHandle<()> {
     thread::Builder::new()
         .name("orderbook-events-gateway-publisher".to_string())
         .spawn(move || {

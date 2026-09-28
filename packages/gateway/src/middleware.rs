@@ -9,7 +9,7 @@ use axum_extra::{
     TypedHeader,
     headers::{Authorization, authorization::Bearer},
 };
-use jsonwebtoken::{decode_header, jwk};
+use jsonwebtoken::decode_header;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -49,7 +49,7 @@ pub struct AuthUser {
 impl FromRequestParts<Arc<AppState>> for AuthUser {
     type Rejection = StatusCode;
 
-    async fn from_request_parts(parts: &mut Parts, state: &Arc<AppState>) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, _state: &Arc<AppState>) -> Result<Self, Self::Rejection> {
         let TypedHeader(Authorization(bearer)) = parts
             .extract::<TypedHeader<Authorization<Bearer>>>()
             .await
@@ -57,7 +57,7 @@ impl FromRequestParts<Arc<AppState>> for AuthUser {
 
         let token = bearer.token();
         let jwt_header = decode_header(token).map_err(|_| StatusCode::UNAUTHORIZED)?;
-        let Some(kid) = jwt_header.kid else {
+        let Some(_kid) = jwt_header.kid else {
             return Err(StatusCode::UNAUTHORIZED);
         };
 

@@ -6,16 +6,17 @@ pub enum ExchangeCommand {
     AddNewOrder(Symbol, NewOrder),
     CancelOrder(Symbol, OrderId),
     ModifyOrder(Symbol, ModifyOrder),
+
     PruneExpiredOrders(Symbol, OrderType),
+    //
 }
 
 impl ExchangeCommand {
     pub fn symbol(&self) -> Symbol {
         match self {
-            Self::AddNewOrder(symbol, _)
-            | Self::CancelOrder(symbol, _)
-            | Self::ModifyOrder(symbol, _)
-            | Self::PruneExpiredOrders(symbol, _) => *symbol,
+            Self::AddNewOrder(symbol, _) | Self::CancelOrder(symbol, _) | Self::ModifyOrder(symbol, _) | Self::PruneExpiredOrders(symbol, _) => {
+                *symbol
+            },
         }
     }
 

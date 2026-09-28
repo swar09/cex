@@ -5,21 +5,14 @@ use crossbeam::channel::Sender; // TODO : replace with disruptor
 use domain::{OrderType, Symbol};
 use engine::commands::ExchangeCommand;
 
-pub fn spawn_gfd_prune_worker(
-    cmd_tx: Sender<ExchangeCommand>,
-    symbol: Symbol,
-    utc_end_hr: u32,
-) -> thread::JoinHandle<()> {
+pub fn spawn_gfd_prune_worker(cmd_tx: Sender<ExchangeCommand>, symbol: Symbol, utc_end_hr: u32) -> thread::JoinHandle<()> {
     thread::Builder::new()
         .name(format!("gfd-pruner-{:?}", symbol))
         .spawn(move || {
             loop {
                 let now = Utc::now();
 
-                let target_today = now
-                    .date_naive()
-                    .and_hms_opt(utc_end_hr, 0, 0)
-                    .map(|naive| naive.and_utc());
+                let target_today = now.date_naive().and_hms_opt(utc_end_hr, 0, 0).map(|naive| naive.and_utc());
 
                 let next_run = match target_today {
                     Some(target) if now < target => target,
