@@ -9,6 +9,53 @@ use crate::risk_engine::{
 pub type InternalUserId = usize;
 pub type ExternalUserId = usize;
 pub type Balance = u64;
+
+pub const BPS_DIVISOR: u64 = 10_000;
+pub const EXCHANGE_FEE_BPS: u64 = 0;
+pub const MARKET_MAKER_FEE_BPS: u64 = 1; // 0.01%
+pub const MARKET_TAKER_FEE_BPS: u64 = 2; // 0.02%
+pub const PARTNER_TRADER_FEE_BPS: u64 = 3; // 0.03%
+pub const RETAIL_FEE_BPS: u64 = 5; // 0.05% 
+
+pub const MARKET_MAKER_PARTNER_FEE_BPS: u64 = MARKET_MAKER_FEE_BPS;
+pub const MARKET_TAKER_PARTNER_FEE_BPS: u64 = MARKET_TAKER_FEE_BPS;
+pub const RETAIL_TRADER_FEE_BPS: u64 = RETAIL_FEE_BPS;
+pub const TAKER_FEE_BPS: u64 = MARKET_TAKER_FEE_BPS;
+pub const MAKER_FEE_BPS: u64 = MARKET_MAKER_FEE_BPS;
+pub const FEE_BPS: u64 = RETAIL_FEE_BPS;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AccountType {
+    ExchangeAccount,
+    MarketMaker,
+    MarketTaker,
+    PartnerTrader,
+    #[default]
+    Retail,
+}
+
+impl AccountType {
+    pub fn fee_bps(&self) -> u64 {
+        match self {
+            Self::ExchangeAccount => EXCHANGE_FEE_BPS,
+            Self::MarketMaker => MARKET_MAKER_FEE_BPS,
+            Self::MarketTaker => MARKET_TAKER_FEE_BPS,
+            Self::PartnerTrader => PARTNER_TRADER_FEE_BPS,
+            Self::Retail => RETAIL_FEE_BPS,
+        }
+    }
+
+    pub fn calculate_fee(&self, side: Side, price: Price, quantity: Quantity) -> u64 {
+        let fee_bps = self.fee_bps();
+        match side {
+            Side::Buy => ((quantity as u64) * fee_bps) / BPS_DIVISOR,
+            Side::Sell => {
+                let gross = price.saturating_mul(quantity as u64);
+                (gross * fee_bps) / BPS_DIVISOR
+            },
+        }
+    }
+}
 pub enum AccountOpp {
     Release,
     Reserve,
@@ -161,6 +208,7 @@ pub struct Account {
     pub reserved: Balance,
     pub status: AccountStatus,
     pub holdings: Holdings,
+    pub account_type: AccountType,
 }
 
 impl Account {
@@ -171,8 +219,25 @@ impl Account {
             reserved: 0,
             status: AccountStatus::Active,
             holdings,
+            account_type: AccountType::Retail,
         }
     }
+
+    pub fn new_with_type(int_id: InternalUserId, balance: Balance, holdings: Holdings, account_type: AccountType) -> Self {
+        Self {
+            user_internal_id: int_id,
+            available_balance: balance,
+            reserved: 0,
+            status: AccountStatus::Active,
+            holdings,
+            account_type,
+        }
+    }
+
+    pub fn calculate_fee(&self, side: Side, price: Price, quantity: Quantity) -> u64 {
+        self.account_type.calculate_fee(side, price, quantity)
+    }
+
     pub fn get_available_balance(&self) -> Option<Balance> {
         Some(self.available_balance)
     }
@@ -327,13 +392,15 @@ impl Account {
                 if !self.consume_reserve(amount) {
                     return false;
                 }
-                self.holdings.credit_asset(asset_id, quantity)
+                let fee = self.calculate_fee(Side::Buy, price, quantity) as Quantity;
+                self.holdings.credit_asset(asset_id, quantity.saturating_sub(fee))
             },
             Side::Sell => {
                 if !self.holdings.consume_reserved_asset(asset_id, quantity) {
                     return false;
                 }
-                self.credit_amount(amount)
+                let fee = self.calculate_fee(Side::Sell, price, quantity);
+                self.credit_amount(amount.saturating_sub(fee))
             },
         }
     }
@@ -343,6 +410,7 @@ pub struct RiskEngine {
     pub id_map: FxHashMap<ExternalUserId, InternalUserId>,
     // default currency is dollars and stored as cents
     pub accounts: Vec<Account>, // index by internal user ids
+    pub exchange_account: Account,
 }
 
 impl RiskEngine {
@@ -350,15 +418,15 @@ impl RiskEngine {
         Self {
             id_map: FxHashMap::default(),
             accounts: Vec::new(),
+            exchange_account: Account {
+                account_type: AccountType::ExchangeAccount,
+                ..Account::default()
+            },
         }
     }
 
     // this constructor will be used in production
-    pub fn new_with_accounts(
-        ext_user_ids: Vec<ExternalUserId>,
-        init_balances: Vec<Balance>,
-        init_holdings: Vec<(AssetId, Quantity)>,
-    ) -> Self {
+    pub fn new_with_accounts(ext_user_ids: Vec<ExternalUserId>, init_balances: Vec<Balance>, init_holdings: Vec<(AssetId, Quantity)>) -> Self {
         let capacity = ext_user_ids.len();
         let mut id_map = FxHashMap::default();
         let mut accounts = Vec::with_capacity(capacity);
@@ -369,14 +437,28 @@ impl RiskEngine {
             accounts.push(account);
         }
 
-        Self { id_map, accounts }
+        Self {
+            id_map,
+            accounts,
+            exchange_account: Account {
+                account_type: AccountType::ExchangeAccount,
+                ..Account::default()
+            },
+        }
+    }
+
+    pub fn get_exchange_account(&self) -> &Account {
+        &self.exchange_account
+    }
+
+    pub fn get_exchange_account_mut(&mut self) -> &mut Account {
+        &mut self.exchange_account
     }
 
     pub fn add_account(&mut self, ext_id: ExternalUserId, balance: Balance, holdings: Holdings) -> InternalUserId {
         let int_id = self.accounts.len();
         self.id_map.insert(ext_id, int_id);
-        self.accounts
-            .push(Account::new_with_balance_and_holdings(int_id, balance, holdings));
+        self.accounts.push(Account::new_with_balance_and_holdings(int_id, balance, holdings));
         int_id
     }
 
@@ -435,47 +517,64 @@ impl RiskEngine {
         side: Side,
         quote_price: Price,
         quote_quantity: Quantity,
-    ) -> bool {
+    ) -> Option<u64> {
         if user_id >= self.accounts.len() {
-            return false;
+            return None;
         }
         match side {
             Side::Buy => {
+                let debit_req_amount = quote_price.checked_mul(quote_quantity as u64)?;
+
                 let account = &mut self.accounts[user_id];
+                let reserved_amount = account.reserved;
+                if reserved_amount < debit_req_amount {
+                    return None;
+                }
+
+                let fee = account.calculate_fee(Side::Buy, quote_price, quote_quantity);
+                let net_quantity = quote_quantity.saturating_sub(fee as Quantity);
 
                 let current_available_quantity = account.holdings.available.entry(asset_id).or_insert(0);
-                let Some(debit_req_amount) = quote_price.checked_mul(quote_quantity as u64) else {
-                    return false;
-                };
-
-                let reserved_amount = account.reserved;
-                if !(reserved_amount >= debit_req_amount) {
-                    // not possible i guess
-                    return false;
-                }
-
-                *current_available_quantity += quote_quantity;
+                *current_available_quantity += net_quantity;
                 account.reserved -= debit_req_amount;
-                true
+
+                if fee > 0 {
+                    self.exchange_account.holdings.credit_asset(asset_id, fee as Quantity);
+                }
+                Some(fee)
             },
             Side::Sell => {
+                let credit_req_amount = quote_price.checked_mul(quote_quantity as u64)?;
                 let account = &mut self.accounts[user_id];
-
-                let Some(credit_req_amount) = quote_price.checked_mul(quote_quantity as u64) else {
-                    return false;
-                };
-                let Some(account_reserved_assets) = account.holdings.reserved.get_mut(&asset_id) else {
-                    return false;
-                };
+                let account_reserved_assets = account.holdings.reserved.get_mut(&asset_id)?;
                 if quote_quantity > *account_reserved_assets {
-                    // not possible i guess
-                    return false;
+                    return None;
                 }
                 *account_reserved_assets -= quote_quantity;
-                account.available_balance += credit_req_amount;
-                true
+
+                let fee = account.calculate_fee(Side::Sell, quote_price, quote_quantity);
+                let net_amount = credit_req_amount.saturating_sub(fee);
+
+                account.available_balance += net_amount;
+                if fee > 0 {
+                    self.exchange_account.available_balance += fee;
+                }
+                Some(fee)
             },
         }
+    }
+
+    pub fn add_account_with_type(
+        &mut self,
+        ext_id: ExternalUserId,
+        balance: Balance,
+        holdings: Holdings,
+        account_type: AccountType,
+    ) -> InternalUserId {
+        let int_id = self.accounts.len();
+        self.id_map.insert(ext_id, int_id);
+        self.accounts.push(Account::new_with_type(int_id, balance, holdings, account_type));
+        int_id
     }
     // check order if valid , reserve the funds/asset and return.
     pub fn check_and_reserve(&mut self, user_id: ExternalUserId, order: Order) -> bool {
@@ -597,12 +696,7 @@ mod tests {
         holdings
     }
 
-    fn setup_engine(
-        ext_user: ExternalUserId,
-        available_balance: Balance,
-        reserved: Balance,
-        holdings: Holdings,
-    ) -> (RiskEngine, InternalUserId) {
+    fn setup_engine(ext_user: ExternalUserId, available_balance: Balance, reserved: Balance, holdings: Holdings) -> (RiskEngine, InternalUserId) {
         let mut engine = RiskEngine::new_empty();
         let internal_id = engine.get_internal_id(ext_user);
         let mut account = Account::new_with_balance_and_holdings(internal_id, available_balance, holdings);
@@ -1264,10 +1358,7 @@ mod tests {
 
         let valid_order = limit_order(1, Side::Sell, 100, 30);
         assert!(engine.check(ext_user, valid_order));
-        assert_eq!(
-            engine.accounts[internal_id].holdings.get_available_quantity(1),
-            Some(50)
-        );
+        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(1), Some(50));
         assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(1), None);
 
         let too_much_order = limit_order(2, Side::Sell, 100, 51);
@@ -1306,18 +1397,12 @@ mod tests {
 
         let valid_order = limit_order(1, Side::Sell, 100, 20);
         assert!(engine.reserve(ext_user, valid_order));
-        assert_eq!(
-            engine.accounts[internal_id].holdings.get_available_quantity(1),
-            Some(30)
-        );
+        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(1), Some(30));
         assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(1), Some(20));
 
         let too_much_order = limit_order(2, Side::Sell, 100, 35);
         assert!(!engine.reserve(ext_user, too_much_order));
-        assert_eq!(
-            engine.accounts[internal_id].holdings.get_available_quantity(1),
-            Some(30)
-        );
+        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(1), Some(30));
         assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(1), Some(20));
 
         let zero_qty_order = limit_order(3, Side::Sell, 100, 0);
@@ -1347,18 +1432,12 @@ mod tests {
 
         let order = limit_order(1, Side::Sell, 100, 20);
         assert!(engine.check_and_reserve(ext_user, order));
-        assert_eq!(
-            engine.accounts[internal_id].holdings.get_available_quantity(1),
-            Some(30)
-        );
+        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(1), Some(30));
         assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(1), Some(20));
 
         let fail_order = limit_order(2, Side::Sell, 100, 35);
         assert!(!engine.check_and_reserve(ext_user, fail_order));
-        assert_eq!(
-            engine.accounts[internal_id].holdings.get_available_quantity(1),
-            Some(30)
-        );
+        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(1), Some(30));
         assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(1), Some(20));
     }
 
@@ -1383,17 +1462,11 @@ mod tests {
 
         assert!(engine.release(internal_id, 1, 1, Side::Sell, 10, 20));
         assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(1), Some(10));
-        assert_eq!(
-            engine.accounts[internal_id].holdings.get_available_quantity(1),
-            Some(30)
-        );
+        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(1), Some(30));
 
         assert!(!engine.release(internal_id, 2, 1, Side::Sell, 10, 15));
         assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(1), Some(10));
-        assert_eq!(
-            engine.accounts[internal_id].holdings.get_available_quantity(1),
-            Some(30)
-        );
+        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(1), Some(30));
 
         assert!(!engine.release(internal_id, 3, 999, Side::Sell, 10, 5));
     }
@@ -1409,43 +1482,158 @@ mod tests {
     fn test_risk_engine_settle_buy() {
         let (mut engine, internal_id) = setup_engine(1, 500, 300, Holdings::new(1, 0));
 
-        assert!(engine.settle(internal_id, 1, 1, Side::Buy, 10, 20));
+        assert!(engine.settle(internal_id, 1, 1, Side::Buy, 10, 20).is_some());
         assert_eq!(engine.accounts[internal_id].reserved, 100);
-        assert_eq!(
-            engine.accounts[internal_id].holdings.get_available_quantity(1),
-            Some(20)
-        );
+        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(1), Some(20));
 
-        assert!(!engine.settle(internal_id, 2, 1, Side::Buy, 10, 20));
+        assert!(engine.settle(internal_id, 2, 1, Side::Buy, 10, 20).is_none());
         assert_eq!(engine.accounts[internal_id].reserved, 100);
 
-        assert!(!engine.settle(internal_id, 3, 1, Side::Buy, u64::MAX, 2));
+        assert!(engine.settle(internal_id, 3, 1, Side::Buy, u64::MAX, 2).is_none());
     }
 
     #[test]
     fn test_risk_engine_settle_buy_new_asset() {
         let (mut engine, internal_id) = setup_engine(1, 500, 300, Holdings::default());
 
-        assert!(engine.settle(internal_id, 1, 2, Side::Buy, 10, 20));
+        assert!(engine.settle(internal_id, 1, 2, Side::Buy, 10, 20).is_some());
         assert_eq!(engine.accounts[internal_id].reserved, 100);
-        assert_eq!(
-            engine.accounts[internal_id].holdings.get_available_quantity(2),
-            Some(20)
-        );
+        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(2), Some(20));
     }
 
     #[test]
     fn test_risk_engine_settle_sell() {
         let (mut engine, internal_id) = setup_engine(1, 500, 0, holdings_reserved(1, 30));
 
-        assert!(engine.settle(internal_id, 1, 1, Side::Sell, 10, 20));
+        assert!(engine.settle(internal_id, 1, 1, Side::Sell, 10, 20).is_some());
         assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(1), Some(10));
         assert_eq!(engine.accounts[internal_id].available_balance, 700);
 
-        assert!(!engine.settle(internal_id, 2, 1, Side::Sell, 10, 15));
+        assert!(engine.settle(internal_id, 2, 1, Side::Sell, 10, 15).is_none());
         assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(1), Some(10));
         assert_eq!(engine.accounts[internal_id].available_balance, 700);
 
-        assert!(!engine.settle(internal_id, 3, 1, Side::Sell, u64::MAX, 2));
+        assert!(engine.settle(internal_id, 3, 1, Side::Sell, u64::MAX, 2).is_none());
+    }
+
+    #[test]
+    fn test_risk_engine_settle_fee_deduction_and_exchange_credit() {
+        let (mut engine, buyer_id) = setup_engine(1, 100_000, 100_000, Holdings::default());
+        let fee = engine.settle(buyer_id, 1, 1, Side::Buy, 10, 10_000);
+        assert_eq!(fee, Some(5));
+        assert_eq!(engine.accounts[buyer_id].holdings.get_available_quantity(1), Some(9995));
+        assert_eq!(engine.exchange_account.holdings.get_available_quantity(1), Some(5));
+
+        let seller_holdings = holdings_reserved(1, 10_000);
+        let ext_seller = 2;
+        let seller_id = engine.get_internal_id(ext_seller);
+        engine
+            .accounts
+            .push(Account::new_with_balance_and_holdings(seller_id, 0, seller_holdings));
+
+        let sell_fee = engine.settle(seller_id, 2, 1, Side::Sell, 10, 10_000);
+        assert_eq!(sell_fee, Some(50));
+        assert_eq!(engine.accounts[seller_id].available_balance, 99_950);
+        assert_eq!(engine.exchange_account.available_balance, 50);
+    }
+
+    #[test]
+    fn test_exchange_account_and_holdings_credited_for_all_account_types() {
+        let account_types = [
+            (AccountType::MarketMaker, MARKET_MAKER_FEE_BPS),
+            (AccountType::MarketTaker, MARKET_TAKER_FEE_BPS),
+            (AccountType::PartnerTrader, PARTNER_TRADER_FEE_BPS),
+            (AccountType::Retail, RETAIL_FEE_BPS),
+        ];
+
+        let mut engine = RiskEngine::new_empty();
+        let asset_id: AssetId = 1;
+        let price: Price = 100;
+        let quantity: Quantity = 10_000;
+        let required_cash = price * (quantity as u64);
+
+        let mut expected_accumulated_asset_fee: Quantity = 0;
+        let mut expected_accumulated_cash_fee: Balance = 0;
+
+        for (i, &(acc_type, expected_bps)) in account_types.iter().enumerate() {
+            let buyer_ext = (i * 2 + 10) as ExternalUserId;
+            let buyer_id = engine.add_account_with_type(buyer_ext, 0, Holdings::default(), acc_type);
+            engine.accounts[buyer_id].reserved = required_cash;
+
+            let expected_buy_fee = ((quantity as u64 * expected_bps) / BPS_DIVISOR) as Quantity;
+            let actual_buy_fee = engine.settle(buyer_id, (i * 2 + 1) as OrderId, asset_id, Side::Buy, price, quantity);
+
+            assert_eq!(actual_buy_fee, Some(expected_buy_fee as u64));
+            assert_eq!(
+                engine.accounts[buyer_id].holdings.get_available_quantity(asset_id),
+                Some(quantity - expected_buy_fee)
+            );
+            expected_accumulated_asset_fee += expected_buy_fee;
+
+            assert_eq!(
+                engine.exchange_account.holdings.get_available_quantity(asset_id),
+                Some(expected_accumulated_asset_fee)
+            );
+
+            let seller_ext = (i * 2 + 11) as ExternalUserId;
+            let seller_id = engine.add_account_with_type(seller_ext, 0, holdings_reserved(asset_id, quantity), acc_type);
+
+            let expected_sell_fee = (required_cash * expected_bps) / BPS_DIVISOR;
+            let actual_sell_fee = engine.settle(seller_id, (i * 2 + 2) as OrderId, asset_id, Side::Sell, price, quantity);
+
+            assert_eq!(actual_sell_fee, Some(expected_sell_fee));
+            assert_eq!(engine.accounts[seller_id].available_balance, required_cash - expected_sell_fee);
+            expected_accumulated_cash_fee += expected_sell_fee;
+
+            assert_eq!(engine.exchange_account.available_balance, expected_accumulated_cash_fee);
+        }
+
+        assert_eq!(engine.exchange_account.holdings.get_available_quantity(asset_id), Some(11));
+        assert_eq!(engine.exchange_account.available_balance, 1100);
+    }
+
+    #[test]
+    fn test_risk_engine_self_trade() {
+        let mut engine = RiskEngine::new_empty();
+        let ext_user = 42;
+        let asset_id: AssetId = 1;
+        let initial_balance: Balance = 100_000;
+        let initial_asset_qty: Quantity = 10_000;
+        let holdings = Holdings::new(asset_id, initial_asset_qty);
+
+        let internal_id = engine.add_account_with_type(ext_user, initial_balance, holdings, AccountType::Retail);
+
+        let trade_price: Price = 10;
+        let trade_qty: Quantity = 2_000;
+
+        let buy_order = limit_order(101, Side::Buy, trade_price, trade_qty);
+        assert!(engine.check_and_reserve(ext_user, buy_order));
+        assert_eq!(engine.accounts[internal_id].available_balance, 80_000);
+        assert_eq!(engine.accounts[internal_id].reserved, 20_000);
+
+        let sell_order = limit_order(102, Side::Sell, trade_price, trade_qty);
+        assert!(engine.check_and_reserve(ext_user, sell_order));
+        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(asset_id), Some(8_000));
+        assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(asset_id), Some(2_000));
+
+        let buy_fee = engine.settle(internal_id, 101, asset_id, Side::Buy, trade_price, trade_qty);
+        assert_eq!(buy_fee, Some(1));
+        assert_eq!(engine.accounts[internal_id].reserved, 0);
+        assert_eq!(engine.accounts[internal_id].holdings.get_available_quantity(asset_id), Some(9_999));
+        assert_eq!(engine.exchange_account.holdings.get_available_quantity(asset_id), Some(1));
+
+        let sell_fee = engine.settle(internal_id, 102, asset_id, Side::Sell, trade_price, trade_qty);
+        assert_eq!(sell_fee, Some(10));
+        assert_eq!(engine.accounts[internal_id].holdings.get_reserved_quantity(asset_id), Some(0));
+        assert_eq!(engine.accounts[internal_id].available_balance, 99_990);
+        assert_eq!(engine.exchange_account.available_balance, 10);
+
+        assert_eq!(
+            engine.accounts[internal_id].available_balance + engine.exchange_account.available_balance,
+            initial_balance
+        );
+        let total_user_asset = engine.accounts[internal_id].holdings.get_available_quantity(asset_id).unwrap();
+        let total_exchange_asset = engine.exchange_account.holdings.get_available_quantity(asset_id).unwrap();
+        assert_eq!(total_user_asset + total_exchange_asset, initial_asset_qty);
     }
 }
