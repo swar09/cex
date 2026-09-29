@@ -12,3 +12,7 @@ tokio = "1.53.1"
 future-utils = "0.12.1"
 futures-util = "0.3.34"
 serde_json = "1.0.151"
+axum-extra = { version = "0.12.6", features = ["typed-header"] }
+uuid = { version = "1.26.1", features = ["serde"] }
+jsonwebtoken = "11.1.0"
+serde = "1.0.229"
