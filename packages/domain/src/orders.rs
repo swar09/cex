@@ -2,11 +2,16 @@ use std::{cell::RefCell, rc::Rc};
 
 use serde::{Deserialize, Serialize};
 
-use crate::types::{AssetId, OrderId, Price, Quantity, Side, UserId};
+use crate::{
+    RemainingQty,
+    types::{AssetId, OrderId, Price, Quantity, Side, UserId},
+};
 
 pub type OrderIds = Vec<OrderId>;
+pub type ExpredOrderInfo = (OrderId, UserId, Price, Side, RemainingQty);
+pub type ExpredOrders = Vec<ExpredOrderInfo>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OrderType {
     GoodTillCancel,
     FillAndKill,
@@ -15,6 +20,7 @@ pub enum OrderType {
     Market,
 }
 
+// elminate the heap alloc at the hot path
 pub type OrderPointer = Rc<RefCell<Order>>;
 
 #[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]
@@ -41,15 +47,7 @@ pub struct NewOrder {
 }
 
 impl Order {
-    pub fn new(
-        order_id: OrderId,
-        user_id: UserId,
-        asset_id: AssetId,
-        side: Side,
-        price: Price,
-        quantity: Quantity,
-        order_type: OrderType,
-    ) -> Self {
+    pub fn new(order_id: OrderId, user_id: UserId, asset_id: AssetId, side: Side, price: Price, quantity: Quantity, order_type: OrderType) -> Self {
         Self {
             order_id,
             user_id,
@@ -62,14 +60,7 @@ impl Order {
         }
     }
 
-    pub fn new_market_order(
-        order_id: OrderId,
-        user_id: UserId,
-        asset_id: AssetId,
-        side: Side,
-        quantity: Quantity,
-        _order_type: OrderType,
-    ) -> Self {
+    pub fn new_market_order(order_id: OrderId, user_id: UserId, asset_id: AssetId, side: Side, quantity: Quantity, _order_type: OrderType) -> Self {
         let order_type = OrderType::Market;
         let price = None;
         Self {
