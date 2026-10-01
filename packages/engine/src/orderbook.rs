@@ -27,6 +27,7 @@ pub struct OrderBook {
     pub bids: BTreeMap<Reverse<Price>, PriceLevel>, // highest price first
     pub orders: FxHashMap<OrderId, OrderEntry>,
     pub data: FxHashMap<Price, LevelData>,
+    pub last_trade_price: Option<Price>,
 }
 
 pub struct LevelData {
@@ -45,7 +46,14 @@ impl OrderBook {
             asks: BTreeMap::new(),
             orders: FxHashMap::default(),
             data: FxHashMap::default(),
-            // sender: s,
+            last_trade_price: None,
+        }
+    }
+
+    pub fn get_market_price(&self, side: Side) -> Option<Price> {
+        match side {
+            Side::Buy => self.asks.first_key_value().map(|(p, _)| *p).or(self.last_trade_price),
+            Side::Sell => self.bids.first_key_value().map(|(Reverse(p), _)| *p).or(self.last_trade_price),
         }
     }
 
@@ -99,6 +107,22 @@ impl OrderBook {
             }
 
             while !self.bids.is_empty() && !self.asks.is_empty() {
+                let (bid_user_id, bid_order_id, ask_user_id, ask_order_id) = {
+                    let (_, bid_level) = self.bids.first_key_value().expect("bids empty check above");
+                    let (_, ask_level) = self.asks.first_key_value().expect("asks empty check above");
+
+                    let bid = bid_level.front().expect("can not get order_pointer").borrow();
+                    let ask = ask_level.front().expect("can not get order_pointer").borrow();
+
+                    (bid.get_user_id(), bid.get_order_id(), ask.get_user_id(), ask.get_order_id())
+                };
+
+                if bid_user_id == ask_user_id {
+                    self.cancel_order(bid_order_id);
+                    self.cancel_order(ask_order_id);
+                    break;
+                }
+
                 let (bid_filled, bid_order_id, bid_user_id, ask_filled, ask_order_id, ask_user_id, quantity) = {
                     let (_, bid_level) = self.bids.first_key_value().expect("bids empty check above");
                     let (_, ask_level) = self.asks.first_key_value().expect("asks empty check above");
@@ -123,6 +147,7 @@ impl OrderBook {
                 };
                 self.on_order_matched(bid_price, quantity);
                 self.on_order_matched(ask_price, quantity);
+                self.last_trade_price = Some(ask_price);
 
                 trades.push(Trade {
                     bid_trade: TradeInfo {
@@ -207,14 +232,9 @@ impl OrderBook {
     }
 
     pub fn add_order(&mut self, order: OrderPointer) -> Option<Trades> {
-        let (order_type, order_id, order_side, order_price, _order_initial_quantity) = {
-            (
-                order.borrow().get_order_type(),
-                order.borrow().get_order_id(),
-                order.borrow().get_side(),
-                order.borrow().get_price(),
-                order.borrow().get_initial_quantity(),
-            )
+        let (order_type, order_id, order_side, _order_initial_quantity) = {
+            let o = order.borrow();
+            (o.get_order_type(), o.get_order_id(), o.get_side(), o.get_initial_quantity())
         };
 
         if order_type == OrderType::Market {
@@ -225,9 +245,12 @@ impl OrderBook {
                 let Reverse(worst_bid_price) = *self.bids.first_entry().expect("bids not empty check above").key();
                 order.borrow_mut().to_good_till_cancel(worst_bid_price);
             } else {
-                return None;
+                let last_price = self.last_trade_price?;
+                order.borrow_mut().to_good_till_cancel(last_price);
             }
         }
+
+        let order_price = order.borrow().get_price();
 
         if self.orders.contains_key(&order_id) {
             return None;
@@ -276,10 +299,7 @@ impl OrderBook {
                 true
             },
             Side::Sell => {
-                let level = self
-                    .asks
-                    .get_mut(&order_entry.price)
-                    .expect("Order & PriceLevel exists check above");
+                let level = self.asks.get_mut(&order_entry.price).expect("Order & PriceLevel exists check above");
                 level.remove(order_entry.slab_key);
                 if level.is_empty() {
                     self.asks.remove(&order_entry.price);
@@ -295,10 +315,7 @@ impl OrderBook {
         if !self.orders.contains_key(&modify_order.order_id) {
             return None;
         }
-        let existing_order_entry = self
-            .orders
-            .get(&modify_order.order_id)
-            .expect("OrderEntry not empty exists check above");
+        let existing_order_entry = self.orders.get(&modify_order.order_id).expect("OrderEntry not empty exists check above");
         let (order_type, user_id, asset_id) = {
             let o = existing_order_entry.order.borrow();
             (o.get_order_type(), o.user_id, o.asset_id)
@@ -332,8 +349,7 @@ impl OrderBook {
                 (ask_price, price_level)
             },
             Side::Sell => {
-                let (Reverse(bid_price), price_level) =
-                    self.bids.first_key_value().expect("bids not empty check above");
+                let (Reverse(bid_price), price_level) = self.bids.first_key_value().expect("bids not empty check above");
                 (bid_price, price_level)
             },
         };
@@ -409,7 +425,7 @@ mod tests {
     fn make_order(id: OrderId, side: Side, price: Price, qty: Quantity, order_type: OrderType) -> OrderPointer {
         Rc::new(RefCell::new(Order {
             order_id: id,
-            user_id: 1,
+            user_id: id,
             asset_id: 1,
             price: Some(price),
             initial_quantity: qty,
@@ -825,5 +841,42 @@ mod tests {
 
         assert!(book.can_fully_fill(Side::Sell, 100, 15));
         assert!(!book.can_fully_fill(Side::Sell, 100, 16));
+    }
+
+    #[test]
+    fn test_self_trade_prevention_cancels_both_orders() {
+        let mut book = OrderBook::new();
+        let user_id = 42;
+        let buy = Rc::new(RefCell::new(Order {
+            order_id: 1,
+            user_id,
+            asset_id: 1,
+            price: Some(100),
+            initial_quantity: 10,
+            remaining_quantity: 10,
+            order_type: OrderType::GoodTillCancel,
+            side: Side::Buy,
+        }));
+        let sell = Rc::new(RefCell::new(Order {
+            order_id: 2,
+            user_id,
+            asset_id: 1,
+            price: Some(100),
+            initial_quantity: 10,
+            remaining_quantity: 10,
+            order_type: OrderType::GoodTillCancel,
+            side: Side::Sell,
+        }));
+
+        book.add_order(buy);
+        assert_eq!(book.len(), 1);
+
+        let trades = book.add_order(sell).unwrap();
+        assert!(trades.is_empty());
+        assert_eq!(book.len(), 0);
+        assert!(!book.orders.contains_key(&1));
+        assert!(!book.orders.contains_key(&2));
+        assert!(book.bids.is_empty());
+        assert!(book.asks.is_empty());
     }
 }
