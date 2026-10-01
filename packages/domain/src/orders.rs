@@ -1,12 +1,12 @@
 use std::{cell::RefCell, rc::Rc};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::types::{AssetId, OrderId, Price, Quantity, Side, UserId};
 
 pub type OrderIds = Vec<OrderId>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum OrderType {
     GoodTillCancel,
     FillAndKill,
@@ -17,7 +17,7 @@ pub enum OrderType {
 
 pub type OrderPointer = Rc<RefCell<Order>>;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Order {
     pub order_id: OrderId,
     pub user_id: UserId,
@@ -29,7 +29,7 @@ pub struct Order {
     pub side: Side,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct NewOrder {
     pub order_id: OrderId,
     pub user_id: UserId,
@@ -129,9 +129,16 @@ impl Order {
         self.order_type = OrderType::GoodTillCancel;
         self.price = Some(price);
     }
+    pub fn apply_modification(&mut self, modify: &ModifyOrder) {
+        self.order_type = modify.order_type;
+        self.side = modify.side;
+        self.price = Some(modify.price);
+        self.initial_quantity = modify.quantity;
+        self.remaining_quantity = modify.quantity;
+    }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModifyOrder {
     pub order_type: OrderType,
     pub order_id: OrderId,

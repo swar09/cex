@@ -9,6 +9,7 @@ use axum_extra::{
     TypedHeader,
     headers::{Authorization, authorization::Bearer},
 };
+use jsonwebtoken::{decode_header, jwk};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -21,6 +22,12 @@ pub enum UserRole {
     Partner,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Audience {
+    Orders,
+    Users,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct Claims {
     pub iss: String,    // issuer (multiple services can assign tokens)
@@ -28,7 +35,7 @@ pub struct Claims {
     pub iat: u64,       // time of assignment
     pub nbf: u64,       // time before token is not valid
     pub exp: u64,       // time after which token is not valid
-    pub aud: String,    // audience (services where token is intended to be used)
+    pub aud: Audience,  // audience (services where token is intended to be used)
     pub role: UserRole, // add by me not mentioned in blog
     pub jti: Uuid,      // token id for jwt blocking purposes
 }
@@ -48,12 +55,20 @@ impl FromRequestParts<Arc<AppState>> for AuthUser {
             .await
             .map_err(|_| StatusCode::UNAUTHORIZED)?;
 
-        // let kid = Extract kid from header
-        // use cache if miss then fetch from authservice and cache it again.
-        // let pub_key = cache.get_pub_key_jwks(kid)
-        // let claims = extract the claims decode the token
+        let token = bearer.token();
+        let jwt_header = decode_header(token).map_err(|_| StatusCode::UNAUTHORIZED)?;
+        let Some(kid) = jwt_header.kid else {
+            return Err(StatusCode::UNAUTHORIZED);
+        };
 
-        // is jti black listed ? yes then retunr unauth , if not then procceed
+        // let jwk = get_or_fetch() : first get jwk from cache if not then fetch JWKS in
+        // cache from well_known json
+        // let decoding key from jwk
+        // then decode using decoding key
+        // if yes then verify the nbf , exp,
+        // check jti from auth-service-cache
+        // reject if any stage fails
+        // handle aud if needed or remove it
 
         todo!();
         // Ok(AuthUser {

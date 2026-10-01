@@ -16,7 +16,7 @@ pub async fn v1_auth_routes() -> Router<AppState> {
 pub async fn v1_order_routes() -> Router<AppState> {
     let router = Router::new()
         .route("/order", get(get_order_by_id))
-        .route("/order", post(create_new_order))
+        // .route("/order", post(create_new_order)) 
         .route("/order/cancel", post(cancel_order))
         .route("/order/modify", post(modify_order));
     // .route("/order", method_router);

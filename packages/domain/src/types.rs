@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
 pub type AssetId = u64;
@@ -7,13 +7,13 @@ pub type Quantity = u32;
 pub type OrderId = u64;
 pub type UserId = u64;
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Side {
     Buy,
     Sell,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TradeInfo {
     pub order_id: OrderId,
     pub user_id: UserId,
@@ -21,7 +21,7 @@ pub struct TradeInfo {
     pub quantity: Quantity,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Trade {
     pub bid_trade: TradeInfo,
     pub ask_trade: TradeInfo,
