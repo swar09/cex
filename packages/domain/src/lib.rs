@@ -4,6 +4,7 @@ pub mod level;
 pub mod orders;
 pub mod symbol;
 pub mod types;
+pub use events::*;
 pub use level::*;
 pub use orders::*;
 pub use symbol::*;

@@ -1,6 +1,10 @@
 pub type Sequence = u64;
 use disruptor::{MultiConsumerBarrier, SingleProducer};
-use domain::{AssetId, Order, OrderIds, Side, Symbol, Trades};
+use domain::{
+    AssetId, CancelReason, ModifyOrderRejectedEvent, Order, OrderCancelledEvent, OrderId, OrderIds,
+    OrderModifiedEvent, OrderPlacedEvent, OrderRejectedEvent, OrderType, RejectReason, Side, Symbol,
+    TradeExecutedEvent, Trades,
+};
 use fxhash::FxHashMap; // hardware optimized hasher function
 use risk::risk_engine::{ExternalUserId, RiskEngine};
 use thiserror::Error;
@@ -34,10 +38,7 @@ impl Exchange {
         }
     }
 
-    pub fn new_with_risk_engine(
-        p: SingleProducer<EventEnvelope, MultiConsumerBarrier>,
-        risk_engine: RiskEngine,
-    ) -> Self {
+    pub fn new_with_risk_engine(p: SingleProducer<EventEnvelope, MultiConsumerBarrier>, risk_engine: RiskEngine) -> Self {
         Self {
             orderbooks: FxHashMap::default(),
             event_tx: EventDispatcher::new(p),
@@ -54,6 +55,14 @@ impl Exchange {
         &mut self.risk_engine
     }
 
+    pub fn get_exchange_account(&self) -> &risk::risk_engine::Account {
+        self.risk_engine.get_exchange_account()
+    }
+
+    pub fn get_exchange_account_mut(&mut self) -> &mut risk::risk_engine::Account {
+        self.risk_engine.get_exchange_account_mut()
+    }
+
     pub fn next_seq(&mut self, symbol: &Symbol) -> Sequence {
         let seq = self.seqs.entry(*symbol).or_insert(0);
         *seq += 1;
@@ -67,179 +76,300 @@ impl Exchange {
 
     pub fn handle_cmd(&mut self, cmd: ExchangeCommand) -> Result<(), ExchangeError> {
         match cmd {
-            ExchangeCommand::AddNewOrder(symbol, new_order) => {
+            ExchangeCommand::AddNewOrder(symbol, mut new_order) => {
+                let book = self.orderbooks.get_mut(&symbol).ok_or(ExchangeError::OrderBookAccessError(symbol))?;
+
+                if new_order.order_type == OrderType::Market {
+                    match book.get_market_price(new_order.side) {
+                        Some(market_price) => {
+                            new_order.price = Some(market_price);
+                            new_order.order_type = OrderType::GoodTillCancel;
+                        },
+                        None => {
+                            let seq = self.next_seq(&symbol);
+                            self.event_tx
+                                .try_send(OrderBookEvent::OrderRejected(
+                                    seq,
+                                    symbol,
+                                    OrderRejectedEvent {
+                                        order_id: new_order.order_id,
+                                        user_id: new_order.user_id,
+                                        reason: RejectReason::NoLiquidity,
+                                    },
+                                ))
+                                .map_err(ExchangeError::ExchangeEventTrySendError)?;
+                            return Ok(());
+                        },
+                    }
+                }
+
                 let order_id = new_order.order_id;
-                let user_id = new_order.user_id as ExternalUserId;
+                let user_id = new_order.user_id;
+                let side = new_order.side;
+                let price = new_order.price.expect("order price is set");
+                let quantity = new_order.quantity;
+                let order_type = new_order.order_type;
                 let asset_id = symbol.get_quantity_unit().asset_id();
                 let order = Order::from(new_order.clone());
 
-                if !self.risk_engine.check_and_reserve(user_id, order) {
+                if !self.risk_engine.check_and_reserve(user_id as ExternalUserId, order) {
                     let seq = self.next_seq(&symbol);
                     self.event_tx
-                        .try_send(OrderBookEvent::OrderRejected(seq, symbol, order_id))
+                        .try_send(OrderBookEvent::OrderRejected(
+                            seq,
+                            symbol,
+                            OrderRejectedEvent {
+                                order_id,
+                                user_id,
+                                reason: RejectReason::InsufficientBalance,
+                            },
+                        ))
                         .map_err(ExchangeError::ExchangeEventTrySendError)?;
                     return Ok(());
                 }
 
-                let book = self
-                    .orderbooks
-                    .get_mut(&symbol)
-                    .ok_or(ExchangeError::OrderBookAccessError(symbol))?;
+                let book = self.orderbooks.get_mut(&symbol).ok_or(ExchangeError::OrderBookAccessError(symbol))?;
                 match book.add_new_order(new_order) {
                     Some(trades) => {
                         let seq = self.next_seq(&symbol);
                         self.event_tx
-                            .try_send(OrderBookEvent::OrderAdded(seq, symbol, order_id))
+                            .try_send(OrderBookEvent::OrderPlaced(
+                                seq,
+                                symbol,
+                                OrderPlacedEvent {
+                                    order_id,
+                                    user_id,
+                                    side,
+                                    price,
+                                    quantity,
+                                    order_type,
+                                },
+                            ))
                             .map_err(ExchangeError::ExchangeEventTrySendError)?;
 
-                        self.handle_trades(trades, symbol, asset_id)?;
+                        self.handle_trades(trades, symbol, asset_id, order_id)?;
                         Ok(())
                     },
                     None => {
-                        let internal_id = self.risk_engine.get_internal_id(user_id);
-                        self.risk_engine.release(
-                            internal_id,
-                            order_id,
-                            asset_id,
-                            order.side,
-                            order.price.unwrap_or(0),
-                            order.initial_quantity,
-                        );
+                        let internal_id = self.risk_engine.get_internal_id(user_id as ExternalUserId);
+                        self.risk_engine.release(internal_id, order_id, asset_id, side, price, quantity);
 
                         let seq = self.next_seq(&symbol);
                         self.event_tx
-                            .try_send(OrderBookEvent::OrderRejected(seq, symbol, order_id))
+                            .try_send(OrderBookEvent::OrderRejected(
+                                seq,
+                                symbol,
+                                OrderRejectedEvent {
+                                    order_id,
+                                    user_id,
+                                    reason: RejectReason::PostOnlyWouldCross,
+                                },
+                            ))
                             .map_err(ExchangeError::ExchangeEventTrySendError)?;
                         Ok(())
                     },
                 }
             },
             ExchangeCommand::CancelOrder(symbol, order_id) => {
-                let book = self
-                    .orderbooks
-                    .get_mut(&symbol)
-                    .ok_or(ExchangeError::OrderBookAccessError(symbol))?;
+                let book = self.orderbooks.get_mut(&symbol).ok_or(ExchangeError::OrderBookAccessError(symbol))?;
 
                 let order_info = book.orders.get(&order_id).map(|entry| {
                     let o = entry.order.borrow();
-                    (
-                        o.user_id as ExternalUserId,
-                        o.side,
-                        o.price.unwrap_or(0),
-                        o.remaining_quantity,
-                    )
+                    (o.user_id, o.side, o.get_price(), o.remaining_quantity)
                 });
 
-                if book.cancel_order(order_id) {
-                    if let Some((user_id, side, price, remaining_qty)) = order_info {
-                        let internal_id = self.risk_engine.get_internal_id(user_id);
-                        let asset_id = symbol.get_quantity_unit().asset_id();
-                        self.risk_engine
-                            .release(internal_id, order_id, asset_id, side, price, remaining_qty);
-                    }
+                if book.cancel_order(order_id)
+                    && let Some((user_id, side, price, remaining_qty)) = order_info
+                {
+                    let internal_id = self.risk_engine.get_internal_id(user_id as ExternalUserId);
+                    let asset_id = symbol.get_quantity_unit().asset_id();
+                    self.risk_engine.release(internal_id, order_id, asset_id, side, price, remaining_qty);
 
                     let seq = self.next_seq(&symbol);
                     self.event_tx
-                        .try_send(OrderBookEvent::OrderCancelled(seq, symbol, order_id))
+                        .try_send(OrderBookEvent::OrderCancelled(
+                            seq,
+                            symbol,
+                            OrderCancelledEvent {
+                                order_id,
+                                user_id,
+                                side,
+                                price,
+                                cancelled_qty: remaining_qty,
+                                reason: CancelReason::UserRequested,
+                            },
+                        ))
                         .map_err(ExchangeError::ExchangeEventTrySendError)?;
                 }
                 Ok(())
             },
             ExchangeCommand::ModifyOrder(symbol, modify_order) => {
-                let book = self
-                    .orderbooks
-                    .get_mut(&symbol)
-                    .ok_or(ExchangeError::OrderBookAccessError(symbol))?;
+                let book = self.orderbooks.get_mut(&symbol).ok_or(ExchangeError::OrderBookAccessError(symbol))?;
+
+                let (user_id, old_price, old_qty) = book
+                    .orders
+                    .get(&modify_order.order_id)
+                    .map(|e| {
+                        let o = e.order.borrow();
+                        (o.user_id, o.get_price(), o.get_remaining_quantity())
+                    })
+                    .unwrap_or((0, modify_order.price, modify_order.quantity));
+
                 match book.modify_order(modify_order) {
                     Some(trades) => {
                         let seq = self.next_seq(&symbol);
                         self.event_tx
-                            .try_send(OrderBookEvent::OrderModified(seq, symbol, modify_order))
+                            .try_send(OrderBookEvent::OrderModified(
+                                seq,
+                                symbol,
+                                OrderModifiedEvent {
+                                    order_id: modify_order.order_id,
+                                    user_id,
+                                    side: modify_order.side,
+                                    old_price,
+                                    new_price: modify_order.price,
+                                    old_qty,
+                                    new_qty: modify_order.quantity,
+                                },
+                            ))
                             .map_err(ExchangeError::ExchangeEventTrySendError)?;
                         let asset_id = symbol.get_quantity_unit().asset_id();
-                        self.handle_trades(trades, symbol, asset_id)?;
+                        self.handle_trades(trades, symbol, asset_id, modify_order.order_id)?;
                         Ok(())
                     },
                     None => {
                         let seq = self.next_seq(&symbol);
                         self.event_tx
-                            .try_send(OrderBookEvent::ModifyOrderRejected(seq, symbol, modify_order))
+                            .try_send(OrderBookEvent::ModifyOrderRejected(
+                                seq,
+                                symbol,
+                                ModifyOrderRejectedEvent {
+                                    order_id: modify_order.order_id,
+                                    user_id,
+                                    side: modify_order.side,
+                                    old_price,
+                                    new_price: modify_order.price,
+                                    old_qty,
+                                    new_qty: modify_order.quantity,
+                                    reason: RejectReason::PostOnlyWouldCross,
+                                },
+                            ))
                             .map_err(ExchangeError::ExchangeEventTrySendError)?;
                         Ok(())
                     },
                 }
             },
             ExchangeCommand::PruneExpiredOrders(symbol, prune_order_type) => {
-                let book = self
-                    .orderbooks
-                    .get_mut(&symbol)
-                    .ok_or(ExchangeError::OrderBookAccessError(symbol))?;
+                let book = self.orderbooks.get_mut(&symbol).ok_or(ExchangeError::OrderBookAccessError(symbol))?;
+                let mut expired_orders: domain::ExpredOrders = vec![];
                 let mut order_ids: OrderIds = vec![];
                 for order_entry in book.orders.values() {
-                    let (order_id, order_type) = {
-                        (
-                            order_entry.order.borrow().order_id,
-                            order_entry.order.borrow().get_order_type(),
-                        )
-                    };
-                    if order_type != prune_order_type {
+                    let o = order_entry.order.borrow();
+                    if o.get_order_type() != prune_order_type {
                         continue;
                     }
-                    order_ids.push(order_id);
+                    expired_orders.push((o.order_id, o.user_id, o.get_price(), o.get_side(), o.get_remaining_quantity()));
+                    order_ids.push(o.order_id);
                 }
-                book.cancel_orders(order_ids.clone());
+                book.cancel_orders(order_ids);
                 let seq = self.next_seq(&symbol);
                 self.event_tx
-                    .try_send(OrderBookEvent::OrdersExpired(seq, symbol, order_ids))
+                    .try_send(OrderBookEvent::OrdersExpired(seq, symbol, expired_orders))
                     .map_err(ExchangeError::ExchangeEventTrySendError)?;
                 Ok(())
             },
         }
     }
-    pub fn handle_trades(&mut self, trades: Trades, symbol: Symbol, asset_id: AssetId) -> Result<(), ExchangeError> {
+    pub fn handle_trades(&mut self, trades: Trades, symbol: Symbol, asset_id: AssetId, taker_order_id_param: OrderId) -> Result<(), ExchangeError> {
         for trade in trades {
-            let ask_internal_id = self
+            let ask_internal_id = self.risk_engine.get_internal_id(trade.ask_trade.user_id as ExternalUserId);
+            let bid_internal_id = self.risk_engine.get_internal_id(trade.bid_trade.user_id as ExternalUserId);
+
+            let buyer_fee = self
                 .risk_engine
-                .get_internal_id(trade.ask_trade.user_id as ExternalUserId);
-            let bid_internal_id = self
+                .settle(
+                    bid_internal_id,
+                    trade.bid_trade.order_id,
+                    asset_id,
+                    Side::Buy,
+                    trade.bid_trade.price,
+                    trade.bid_trade.quantity,
+                )
+                .unwrap_or(0);
+
+            let seller_fee = self
                 .risk_engine
-                .get_internal_id(trade.bid_trade.user_id as ExternalUserId);
+                .settle(
+                    ask_internal_id,
+                    trade.ask_trade.order_id,
+                    asset_id,
+                    Side::Sell,
+                    trade.ask_trade.price,
+                    trade.ask_trade.quantity,
+                )
+                .unwrap_or(0);
 
-            self.risk_engine.settle(
-                bid_internal_id,
-                trade.bid_trade.order_id,
-                asset_id,
-                Side::Buy,
-                trade.bid_trade.price,
-                trade.bid_trade.quantity,
-            );
+            let (maker_order_id, taker_order_id, maker_user_id, taker_user_id, maker_side, taker_side, maker_fee, taker_fee) =
+                if trade.bid_trade.order_id == taker_order_id_param {
+                    (
+                        trade.ask_trade.order_id,
+                        trade.bid_trade.order_id,
+                        trade.ask_trade.user_id,
+                        trade.bid_trade.user_id,
+                        Side::Sell,
+                        Side::Buy,
+                        seller_fee,
+                        buyer_fee,
+                    )
+                } else {
+                    (
+                        trade.bid_trade.order_id,
+                        trade.ask_trade.order_id,
+                        trade.bid_trade.user_id,
+                        trade.ask_trade.user_id,
+                        Side::Buy,
+                        Side::Sell,
+                        buyer_fee,
+                        seller_fee,
+                    )
+                };
 
-            self.risk_engine.settle(
-                ask_internal_id,
-                trade.ask_trade.order_id,
-                asset_id,
-                Side::Sell,
-                trade.ask_trade.price,
-                trade.ask_trade.quantity,
-            );
+            let maker_remaining_qty = self
+                .orderbooks
+                .get(&symbol)
+                .and_then(|b| b.orders.get(&maker_order_id))
+                .map(|e| e.order.borrow().get_remaining_quantity())
+                .unwrap_or(0);
 
-            // ask_trade
-            let (order_id, price, quantity) = {
-                let order = trade.ask_trade;
-                (order.order_id, order.price, order.quantity)
-            };
+            let taker_remaining_qty = self
+                .orderbooks
+                .get(&symbol)
+                .and_then(|b| b.orders.get(&taker_order_id))
+                .map(|e| e.order.borrow().get_remaining_quantity())
+                .unwrap_or(0);
+
             let seq = self.next_seq(&symbol);
+            let trade_id = seq;
             self.event_tx
-                .try_send(OrderBookEvent::OrderMatched(seq, symbol, order_id, price, quantity))
-                .map_err(ExchangeError::ExchangeEventTrySendError)?;
-            // bid_trade
-            let (order_id, price, quantity) = {
-                let order = trade.bid_trade;
-                (order.order_id, order.price, order.quantity)
-            };
-            let seq = self.next_seq(&symbol);
-            self.event_tx
-                .try_send(OrderBookEvent::OrderMatched(seq, symbol, order_id, price, quantity))
+                .try_send(OrderBookEvent::TradeExecuted(
+                    seq,
+                    symbol,
+                    TradeExecutedEvent {
+                        trade_id,
+                        maker_order_id,
+                        taker_order_id,
+                        maker_user_id,
+                        taker_user_id,
+                        maker_side,
+                        taker_side,
+                        price: trade.ask_trade.price,
+                        quantity: trade.ask_trade.quantity,
+                        maker_remaining_qty,
+                        taker_remaining_qty,
+                        maker_fee,
+                        taker_fee,
+                    },
+                ))
                 .map_err(ExchangeError::ExchangeEventTrySendError)?;
         }
         Ok(())
@@ -249,7 +379,7 @@ impl Exchange {
 #[cfg(test)]
 mod tests {
     use disruptor::{BusySpin, EventPoller, SingleProducerBarrier, build_single_producer};
-    use domain::{NewOrder, OrderId, OrderType, Side};
+    use domain::{CancelReason, NewOrder, OrderId, OrderType, RejectReason, Side};
 
     use super::*;
 
@@ -261,11 +391,14 @@ mod tests {
         let (event_poller, builder) = builder.new_event_poller();
         let p = builder.build();
         let mut exchange = Exchange::new(p);
-        let mut holdings = risk::risk_engine::Holdings::default();
+        let mut holdings_1 = risk::risk_engine::Holdings::default();
+        let mut holdings_2 = risk::risk_engine::Holdings::default();
         for symbol in Symbol::ALL {
-            holdings.credit_asset(symbol.get_quantity_unit().asset_id(), 1_000_000);
+            holdings_1.credit_asset(symbol.get_quantity_unit().asset_id(), 1_000_000);
+            holdings_2.credit_asset(symbol.get_quantity_unit().asset_id(), 1_000_000);
         }
-        exchange.get_risk_engine_mut().add_account(1, 1_000_000_000, holdings);
+        exchange.get_risk_engine_mut().add_account(1, 1_000_000_000, holdings_1);
+        exchange.get_risk_engine_mut().add_account(2, 1_000_000_000, holdings_2);
         (exchange, event_poller)
     }
 
@@ -283,7 +416,7 @@ mod tests {
     fn new_sell_fak(order_id: OrderId) -> NewOrder {
         NewOrder {
             order_id,
-            user_id: 1,
+            user_id: 2,
             asset_id: 1,
             order_type: OrderType::FillAndKill,
             side: Side::Sell,
@@ -305,11 +438,22 @@ mod tests {
     fn new_sell_gtc(order_id: OrderId) -> NewOrder {
         NewOrder {
             order_id,
-            user_id: 1,
+            user_id: 2,
             asset_id: 1,
             order_type: OrderType::GoodTillCancel,
             side: Side::Sell,
             price: Some(100),
+            quantity: 1,
+        }
+    }
+    fn new_buy_market(order_id: OrderId) -> NewOrder {
+        NewOrder {
+            order_id,
+            user_id: 1,
+            asset_id: 1,
+            order_type: OrderType::Market,
+            side: Side::Buy,
+            price: None,
             quantity: 1,
         }
     }
@@ -332,20 +476,55 @@ mod tests {
         let (mut exchange, mut poller) = new_exchange();
         exchange.add_new_orderbook(SYMBOL);
 
-        exchange
-            .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_gtc(1)))
-            .unwrap();
-        exchange
-            .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_sell_gtc(2)))
-            .unwrap();
+        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_gtc(1))).unwrap();
+        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_sell_gtc(2))).unwrap();
 
         assert_eq!(
             drain(&mut poller),
             vec![
-                OrderBookEvent::OrderAdded(1, SYMBOL, 1),
-                OrderBookEvent::OrderAdded(2, SYMBOL, 2),
-                OrderBookEvent::OrderMatched(3, SYMBOL, 2, 100, 1),
-                OrderBookEvent::OrderMatched(4, SYMBOL, 1, 100, 1),
+                OrderBookEvent::OrderPlaced(
+                    1,
+                    SYMBOL,
+                    OrderPlacedEvent {
+                        order_id: 1,
+                        user_id: 1,
+                        side: Side::Buy,
+                        price: 100,
+                        quantity: 1,
+                        order_type: OrderType::GoodTillCancel,
+                    },
+                ),
+                OrderBookEvent::OrderPlaced(
+                    2,
+                    SYMBOL,
+                    OrderPlacedEvent {
+                        order_id: 2,
+                        user_id: 2,
+                        side: Side::Sell,
+                        price: 100,
+                        quantity: 1,
+                        order_type: OrderType::GoodTillCancel,
+                    },
+                ),
+                OrderBookEvent::TradeExecuted(
+                    3,
+                    SYMBOL,
+                    TradeExecutedEvent {
+                        trade_id: 3,
+                        maker_order_id: 1,
+                        taker_order_id: 2,
+                        maker_user_id: 1,
+                        taker_user_id: 2,
+                        maker_side: Side::Buy,
+                        taker_side: Side::Sell,
+                        price: 100,
+                        quantity: 1,
+                        maker_remaining_qty: 0,
+                        taker_remaining_qty: 0,
+                        maker_fee: 0,
+                        taker_fee: 0,
+                    },
+                ),
             ]
         );
     }
@@ -356,11 +535,23 @@ mod tests {
         let (mut exchange, mut poller) = new_exchange();
         exchange.add_new_orderbook(SYMBOL);
 
-        exchange
-            .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_gtc(1)))
-            .unwrap();
+        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_gtc(1))).unwrap();
 
-        assert_eq!(drain(&mut poller), vec![OrderBookEvent::OrderAdded(1, SYMBOL, 1)]);
+        assert_eq!(
+            drain(&mut poller),
+            vec![OrderBookEvent::OrderPlaced(
+                1,
+                SYMBOL,
+                OrderPlacedEvent {
+                    order_id: 1,
+                    user_id: 1,
+                    side: Side::Buy,
+                    price: 100,
+                    quantity: 1,
+                    order_type: OrderType::GoodTillCancel,
+                },
+            )]
+        );
     }
 
     #[test]
@@ -369,17 +560,23 @@ mod tests {
         let (mut exchange, mut poller) = new_exchange();
         exchange.add_new_orderbook(SYMBOL);
 
-        exchange
-            .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_gtc(1)))
-            .unwrap();
-        exchange
-            .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_sell_fak(2)))
-            .unwrap();
+        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_gtc(1))).unwrap();
+        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_sell_fak(2))).unwrap();
 
         let events = drain(&mut poller);
-        assert!(events.contains(&OrderBookEvent::OrderAdded(1, SYMBOL, 1)));
-        assert!(events.contains(&OrderBookEvent::OrderMatched(4, SYMBOL, 1, 100, 1)));
-        assert!(events.contains(&OrderBookEvent::OrderMatched(3, SYMBOL, 2, 100, 1)));
+        assert!(events.contains(&OrderBookEvent::OrderPlaced(
+            1,
+            SYMBOL,
+            OrderPlacedEvent {
+                order_id: 1,
+                user_id: 1,
+                side: Side::Buy,
+                price: 100,
+                quantity: 1,
+                order_type: OrderType::GoodTillCancel,
+            },
+        )));
+        assert!(events.iter().any(|e| matches!(e, OrderBookEvent::TradeExecuted(..))));
     }
 
     #[test]
@@ -388,11 +585,20 @@ mod tests {
         let (mut exchange, mut poller) = new_exchange();
         exchange.add_new_orderbook(SYMBOL);
 
-        exchange
-            .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_fak(1)))
-            .unwrap();
+        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_fak(1))).unwrap();
 
-        assert_eq!(drain(&mut poller), vec![OrderBookEvent::OrderRejected(1, SYMBOL, 1)]);
+        assert_eq!(
+            drain(&mut poller),
+            vec![OrderBookEvent::OrderRejected(
+                1,
+                SYMBOL,
+                OrderRejectedEvent {
+                    order_id: 1,
+                    user_id: 1,
+                    reason: RejectReason::PostOnlyWouldCross,
+                },
+            )]
+        );
     }
 
     #[test]
@@ -401,13 +607,25 @@ mod tests {
         let (mut exchange, mut poller) = new_exchange();
         exchange.add_new_orderbook(SYMBOL);
 
-        exchange
-            .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_gtc(1)))
-            .unwrap();
+        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_gtc(1))).unwrap();
         drain(&mut poller);
 
         exchange.handle_cmd(ExchangeCommand::CancelOrder(SYMBOL, 1)).unwrap();
-        assert_eq!(drain(&mut poller), vec![OrderBookEvent::OrderCancelled(2, SYMBOL, 1)]);
+        assert_eq!(
+            drain(&mut poller),
+            vec![OrderBookEvent::OrderCancelled(
+                2,
+                SYMBOL,
+                OrderCancelledEvent {
+                    order_id: 1,
+                    user_id: 1,
+                    side: Side::Buy,
+                    price: 100,
+                    cancelled_qty: 1,
+                    reason: CancelReason::UserRequested,
+                },
+            )]
+        );
     }
 
     #[test]
@@ -426,12 +644,8 @@ mod tests {
         let (mut exchange, mut poller) = new_exchange();
         exchange.add_new_orderbook(SYMBOL);
 
-        exchange
-            .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_gtc(1)))
-            .unwrap();
-        exchange
-            .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_sell_gtc(2)))
-            .unwrap();
+        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_gtc(1))).unwrap();
+        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_sell_gtc(2))).unwrap();
         drain(&mut poller);
 
         exchange.handle_cmd(ExchangeCommand::CancelOrder(SYMBOL, 1)).unwrap();
@@ -445,9 +659,7 @@ mod tests {
         exchange.add_new_orderbook(Symbol::EthInr);
 
         // a resting buy on BtcInr should NOT match a sell on EthInr
-        exchange
-            .handle_cmd(ExchangeCommand::AddNewOrder(Symbol::BtcInr, new_buy_gtc(1)))
-            .unwrap();
+        exchange.handle_cmd(ExchangeCommand::AddNewOrder(Symbol::BtcInr, new_buy_gtc(1))).unwrap();
         exchange
             .handle_cmd(ExchangeCommand::AddNewOrder(Symbol::EthInr, new_sell_gtc(2)))
             .unwrap();
@@ -456,11 +668,33 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                OrderBookEvent::OrderAdded(1, Symbol::BtcInr, 1),
-                OrderBookEvent::OrderAdded(1, Symbol::EthInr, 2),
+                OrderBookEvent::OrderPlaced(
+                    1,
+                    Symbol::BtcInr,
+                    OrderPlacedEvent {
+                        order_id: 1,
+                        user_id: 1,
+                        side: Side::Buy,
+                        price: 100,
+                        quantity: 1,
+                        order_type: OrderType::GoodTillCancel,
+                    },
+                ),
+                OrderBookEvent::OrderPlaced(
+                    1,
+                    Symbol::EthInr,
+                    OrderPlacedEvent {
+                        order_id: 2,
+                        user_id: 2,
+                        side: Side::Sell,
+                        price: 100,
+                        quantity: 1,
+                        order_type: OrderType::GoodTillCancel,
+                    },
+                ),
             ]
         );
-        assert!(!events.iter().any(|e| matches!(e, OrderBookEvent::OrderMatched(..))));
+        assert!(!events.iter().any(|e| matches!(e, OrderBookEvent::TradeExecuted(..))));
     }
 
     #[test]
@@ -469,23 +703,16 @@ mod tests {
         let mut id: OrderId = 0;
         for symbol in Symbol::ALL.iter() {
             exchange.add_new_orderbook(*symbol);
-            exchange
-                .handle_cmd(ExchangeCommand::AddNewOrder(*symbol, new_buy_gtc(id)))
-                .unwrap();
+            exchange.handle_cmd(ExchangeCommand::AddNewOrder(*symbol, new_buy_gtc(id))).unwrap();
             id += 1;
-            exchange
-                .handle_cmd(ExchangeCommand::AddNewOrder(*symbol, new_sell_gtc(id)))
-                .unwrap();
+            exchange.handle_cmd(ExchangeCommand::AddNewOrder(*symbol, new_sell_gtc(id))).unwrap();
             id += 1;
         }
 
         let events = drain(&mut poller);
-        let matched_count = events
-            .iter()
-            .filter(|e| matches!(e, OrderBookEvent::OrderMatched(..)))
-            .count();
+        let matched_count = events.iter().filter(|e| matches!(e, OrderBookEvent::TradeExecuted(..))).count();
 
-        assert_eq!(matched_count, Symbol::ALL.len() * 2);
+        assert_eq!(matched_count, Symbol::ALL.len());
     }
 
     #[test]
@@ -508,11 +735,20 @@ mod tests {
             quantity: 10,
         };
 
-        exchange
-            .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, order))
-            .unwrap();
+        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, order)).unwrap();
 
-        assert_eq!(drain(&mut poller), vec![OrderBookEvent::OrderRejected(1, SYMBOL, 1)]);
+        assert_eq!(
+            drain(&mut poller),
+            vec![OrderBookEvent::OrderRejected(
+                1,
+                SYMBOL,
+                OrderRejectedEvent {
+                    order_id: 1,
+                    user_id: 99,
+                    reason: RejectReason::InsufficientBalance,
+                },
+            )]
+        );
         assert!(exchange.orderbooks[&SYMBOL].is_empty());
     }
 
@@ -542,9 +778,7 @@ mod tests {
             price: Some(100),
             quantity: 2,
         };
-        exchange
-            .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, buy_order))
-            .unwrap();
+        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, buy_order)).unwrap();
 
         let sell_order = NewOrder {
             order_id: 2,
@@ -555,9 +789,7 @@ mod tests {
             price: Some(100),
             quantity: 2,
         };
-        exchange
-            .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, sell_order))
-            .unwrap();
+        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, sell_order)).unwrap();
 
         let buyer_account = &exchange.get_risk_engine().accounts[buyer_int];
         assert_eq!(buyer_account.available_balance, 800);
@@ -594,9 +826,7 @@ mod tests {
             price: Some(100),
             quantity: 3,
         };
-        exchange
-            .handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, buy_order))
-            .unwrap();
+        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, buy_order)).unwrap();
 
         assert_eq!(exchange.get_risk_engine().accounts[user_int].available_balance, 700);
         assert_eq!(exchange.get_risk_engine().accounts[user_int].reserved, 300);
@@ -605,5 +835,187 @@ mod tests {
 
         assert_eq!(exchange.get_risk_engine().accounts[user_int].available_balance, 1000);
         assert_eq!(exchange.get_risk_engine().accounts[user_int].reserved, 0);
+    }
+
+    #[test]
+    fn market_order_rejected_when_no_liquidity() {
+        const SYMBOL: Symbol = Symbol::BtcInr;
+        let (mut exchange, mut poller) = new_exchange();
+        exchange.add_new_orderbook(SYMBOL);
+
+        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_market(1))).unwrap();
+
+        assert_eq!(
+            drain(&mut poller),
+            vec![OrderBookEvent::OrderRejected(
+                1,
+                SYMBOL,
+                OrderRejectedEvent {
+                    order_id: 1,
+                    user_id: 1,
+                    reason: RejectReason::NoLiquidity,
+                },
+            )]
+        );
+        assert_eq!(exchange.get_risk_engine().accounts[0].reserved, 0);
+    }
+
+    #[test]
+    fn market_order_matches_when_liquidity_exists() {
+        const SYMBOL: Symbol = Symbol::BtcInr;
+        let (mut exchange, mut poller) = new_exchange();
+        exchange.add_new_orderbook(SYMBOL);
+
+        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_sell_gtc(1))).unwrap();
+
+        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_market(2))).unwrap();
+
+        let events = drain(&mut poller);
+        assert_eq!(events.len(), 3);
+        assert_eq!(
+            events[0],
+            OrderBookEvent::OrderPlaced(
+                1,
+                SYMBOL,
+                OrderPlacedEvent {
+                    order_id: 1,
+                    user_id: 2,
+                    side: Side::Sell,
+                    price: 100,
+                    quantity: 1,
+                    order_type: OrderType::GoodTillCancel,
+                },
+            )
+        );
+        assert_eq!(
+            events[1],
+            OrderBookEvent::OrderPlaced(
+                2,
+                SYMBOL,
+                OrderPlacedEvent {
+                    order_id: 2,
+                    user_id: 1,
+                    side: Side::Buy,
+                    price: 100,
+                    quantity: 1,
+                    order_type: OrderType::GoodTillCancel,
+                },
+            )
+        );
+        assert!(matches!(events[2], OrderBookEvent::TradeExecuted(3, SYMBOL, ..)));
+    }
+
+    #[test]
+    fn market_order_uses_last_trade_price_when_book_empty_after_trade() {
+        const SYMBOL: Symbol = Symbol::BtcInr;
+        let (mut exchange, mut poller) = new_exchange();
+        exchange.add_new_orderbook(SYMBOL);
+
+        let mut sell = new_sell_gtc(1);
+        sell.price = Some(150);
+        let mut buy = new_buy_gtc(2);
+        buy.price = Some(150);
+
+        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, sell)).unwrap();
+        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, buy)).unwrap();
+        drain(&mut poller);
+
+        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, new_buy_market(3))).unwrap();
+
+        let events = drain(&mut poller);
+        assert_eq!(
+            events,
+            vec![OrderBookEvent::OrderPlaced(
+                4,
+                SYMBOL,
+                OrderPlacedEvent {
+                    order_id: 3,
+                    user_id: 1,
+                    side: Side::Buy,
+                    price: 150,
+                    quantity: 1,
+                    order_type: OrderType::GoodTillCancel,
+                },
+            )]
+        );
+    }
+
+    #[test]
+    fn test_exchange_accumulates_fees_in_exchange_account_and_holdings_by_account_type() {
+        const SYMBOL: Symbol = Symbol::BtcInr;
+        let (mut exchange, mut poller) = new_exchange();
+        exchange.add_new_orderbook(SYMBOL);
+
+        let asset_id = SYMBOL.get_quantity_unit().asset_id();
+        let mm_user_id: u64 = 100;
+        let retail_user_id: u64 = 200;
+
+        let mut mm_holdings = risk::Holdings::default();
+        mm_holdings.credit_asset(asset_id, 20_000);
+        exchange.get_risk_engine_mut().add_account_with_type(
+            mm_user_id as risk::risk_engine::ExternalUserId,
+            1_000_000,
+            mm_holdings,
+            risk::AccountType::MarketMaker,
+        );
+
+        let retail_holdings = risk::Holdings::default();
+        exchange.get_risk_engine_mut().add_account_with_type(
+            retail_user_id as risk::risk_engine::ExternalUserId,
+            1_000_000,
+            retail_holdings,
+            risk::AccountType::Retail,
+        );
+
+        let maker_order = NewOrder {
+            order_id: 10,
+            user_id: mm_user_id,
+            asset_id,
+            order_type: OrderType::GoodTillCancel,
+            side: Side::Sell,
+            price: Some(100),
+            quantity: 10_000,
+        };
+        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, maker_order)).unwrap();
+
+        let taker_order = NewOrder {
+            order_id: 20,
+            user_id: retail_user_id,
+            asset_id,
+            order_type: OrderType::GoodTillCancel,
+            side: Side::Buy,
+            price: Some(100),
+            quantity: 10_000,
+        };
+        exchange.handle_cmd(ExchangeCommand::AddNewOrder(SYMBOL, taker_order)).unwrap();
+
+        let events = drain(&mut poller);
+        assert_eq!(events.len(), 3);
+        assert_eq!(
+            events[2],
+            OrderBookEvent::TradeExecuted(
+                3,
+                SYMBOL,
+                TradeExecutedEvent {
+                    trade_id: 3,
+                    maker_order_id: 10,
+                    taker_order_id: 20,
+                    maker_user_id: mm_user_id,
+                    taker_user_id: retail_user_id,
+                    maker_side: Side::Sell,
+                    taker_side: Side::Buy,
+                    price: 100,
+                    quantity: 10_000,
+                    maker_remaining_qty: 0,
+                    taker_remaining_qty: 0,
+                    maker_fee: 100,
+                    taker_fee: 5,
+                },
+            )
+        );
+
+        let ex_acc = exchange.get_exchange_account();
+        assert_eq!(ex_acc.available_balance, 100);
+        assert_eq!(ex_acc.holdings.get_available_quantity(asset_id), Some(5));
     }
 }
