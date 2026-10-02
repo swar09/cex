@@ -20,8 +20,6 @@ pub type TakerSide = Side;
 
 pub type OldPrice = Price;
 pub type NewPrice = Price;
-pub type MakerFee = Price;
-pub type TakerFee = Price;
 
 pub type OldQty = Quantity;
 pub type NewQty = Quantity;
@@ -41,6 +39,7 @@ pub struct TradeInfo {
     pub user_id: UserId,
     pub price: Price,
     pub quantity: Quantity,
+    pub remaining_quantity: Quantity,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,7 +60,7 @@ impl Trade {
 
 /// Pre-allocated small vector for trades on the stack; spills to heap if
 /// exceeding capacity.
-pub type Trades = SmallVec<[Trade; 64]>;
+pub type Trades = SmallVec<[Trade; 8]>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CancelReason {

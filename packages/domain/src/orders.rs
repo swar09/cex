@@ -70,43 +70,43 @@ impl Order {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn get_order_id(&self) -> OrderId {
         self.order_id
     }
-    #[inline(always)]
+    #[inline]
     pub fn get_user_id(&self) -> UserId {
         self.user_id
     }
-    #[inline(always)]
+    #[inline]
     pub fn get_asset_id(&self) -> AssetId {
         self.asset_id
     }
-    #[inline(always)]
+    #[inline]
     pub fn get_side(&self) -> Side {
         self.side
     }
-    #[inline(always)]
+    #[inline]
     pub fn get_price(&self) -> Price {
         self.price.unwrap() // intentional 
     }
-    #[inline(always)]
+    #[inline]
     pub fn get_order_type(&self) -> OrderType {
         self.order_type
     }
-    #[inline(always)]
+    #[inline]
     pub fn get_initial_quantity(&self) -> Quantity {
         self.initial_quantity
     }
-    #[inline(always)]
+    #[inline]
     pub fn get_remaining_quantity(&self) -> Quantity {
         self.remaining_quantity
     }
-    #[inline(always)]
+    #[inline]
     pub fn get_filled_quantity(&self) -> Quantity {
         self.initial_quantity - self.remaining_quantity
     }
-    #[inline(always)]
+    #[inline]
     pub fn fill(&mut self, quantity: Quantity) {
         if quantity > self.get_remaining_quantity() {
             eprintln!(
@@ -118,12 +118,20 @@ impl Order {
         self.remaining_quantity -= quantity;
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn is_filled(&self) -> bool {
         self.get_remaining_quantity() == 0
     }
     pub fn to_good_till_cancel(&mut self, price: Price) {
         self.order_type = OrderType::GoodTillCancel;
+        self.price = Some(price);
+    }
+    pub fn to_fill_and_kill(&mut self, price: Price) {
+        self.order_type = OrderType::FillAndKill;
+        self.price = Some(price);
+    }
+    pub fn to_fill_or_kill(&mut self, price: Price) {
+        self.order_type = OrderType::FillOrKill;
         self.price = Some(price);
     }
     pub fn apply_modification(&mut self, modify: &ModifyOrder) {
@@ -145,20 +153,20 @@ pub struct ModifyOrder {
 }
 
 impl ModifyOrder {
-    #[inline(always)]
+    #[inline]
     pub fn get_order_id(&self) -> OrderId {
         self.order_id
     }
-    #[inline(always)]
+    #[inline]
     pub fn get_side(&self) -> Side {
         self.side
     }
-    #[inline(always)]
+    #[inline]
     pub fn get_price(&self) -> Price {
         self.price
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn get_quantity(&self) -> Quantity {
         self.quantity
     }

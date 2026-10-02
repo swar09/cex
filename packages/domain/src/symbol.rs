@@ -135,7 +135,7 @@ pub enum Currency {
 }
 
 impl Currency {
-    #[inline(always)]
+    #[inline]
     pub const fn asset_id(&self) -> AssetId {
         *self as AssetId
     }

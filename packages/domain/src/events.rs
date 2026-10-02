@@ -1,9 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CancelReason, CancelledQty, MakerFee, MakerOrderId, MakerRemainingQty, MakerSide, MakerUserId, NewPrice, NewQty,
-    OldPrice, OldQty, OrderId, OrderType, Price, Quantity, RejectReason, Side, TakerFee, TakerOrderId,
-    TakerRemainingQty, TakerSide, TakerUserId, TradeId, UserId,
+    CancelReason, CancelledQty, MakerOrderId, MakerRemainingQty, MakerSide, MakerUserId, NewPrice, NewQty, OldPrice, OldQty, OrderId, OrderType,
+    Price, Quantity, RejectReason, Side, TakerOrderId, TakerRemainingQty, TakerSide, TakerUserId, TradeId, UserId,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,8 +28,6 @@ pub struct TradeExecutedEvent {
     pub quantity: Quantity,
     pub maker_remaining_qty: MakerRemainingQty,
     pub taker_remaining_qty: TakerRemainingQty,
-    pub maker_fee: MakerFee,
-    pub taker_fee: TakerFee,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
