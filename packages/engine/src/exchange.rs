@@ -1,9 +1,8 @@
 pub type Sequence = u64;
 use disruptor::{MultiConsumerBarrier, SingleProducer};
 use domain::{
-    AssetId, CancelReason, ModifyOrderRejectedEvent, Order, OrderCancelledEvent, OrderId, OrderIds,
-    OrderModifiedEvent, OrderPlacedEvent, OrderRejectedEvent, OrderType, RejectReason, Side, Symbol,
-    TradeExecutedEvent, Trades,
+    AssetId, CancelReason, ModifyOrderRejectedEvent, Order, OrderCancelledEvent, OrderId, OrderIds, OrderModifiedEvent, OrderPlacedEvent,
+    OrderRejectedEvent, OrderType, RejectReason, Side, Symbol, TradeExecutedEvent, Trades,
 };
 use fxhash::FxHashMap; // hardware optimized hasher function
 use risk::risk_engine::{ExternalUserId, RiskEngine};
@@ -24,7 +23,7 @@ pub enum ExchangeError {
 pub struct Exchange {
     pub orderbooks: FxHashMap<Symbol, OrderBook>,
     pub event_tx: EventDispatcher,
-    seqs: FxHashMap<Symbol, Sequence>,
+    seqs: [Sequence; 16],
     risk_engine: RiskEngine,
 }
 
@@ -33,7 +32,7 @@ impl Exchange {
         Self {
             orderbooks: FxHashMap::default(),  // empty
             event_tx: EventDispatcher::new(p), // sender
-            seqs: FxHashMap::default(),
+            seqs: [0; 16],
             risk_engine: RiskEngine::new_empty(),
         }
     }
@@ -42,7 +41,7 @@ impl Exchange {
         Self {
             orderbooks: FxHashMap::default(),
             event_tx: EventDispatcher::new(p),
-            seqs: FxHashMap::default(),
+            seqs: [0; 16],
             risk_engine,
         }
     }
@@ -63,10 +62,11 @@ impl Exchange {
         self.risk_engine.get_exchange_account_mut()
     }
 
+    #[inline]
     pub fn next_seq(&mut self, symbol: &Symbol) -> Sequence {
-        let seq = self.seqs.entry(*symbol).or_insert(0);
-        *seq += 1;
-        *seq
+        let idx = *symbol as usize;
+        self.seqs[idx] += 1;
+        self.seqs[idx]
     }
 
     pub fn add_new_orderbook(&mut self, symbol: Symbol) {
@@ -74,16 +74,19 @@ impl Exchange {
         self.orderbooks.insert(symbol, orderbook);
     }
 
+    #[inline(always)]
     pub fn handle_cmd(&mut self, cmd: ExchangeCommand) -> Result<(), ExchangeError> {
         match cmd {
             ExchangeCommand::AddNewOrder(symbol, mut new_order) => {
-                let book = self.orderbooks.get_mut(&symbol).ok_or(ExchangeError::OrderBookAccessError(symbol))?;
-
                 if new_order.order_type == OrderType::Market {
+                    let book = self.orderbooks.get(&symbol).ok_or(ExchangeError::OrderBookAccessError(symbol))?;
                     match book.get_market_price(new_order.side) {
                         Some(market_price) => {
-                            new_order.price = Some(market_price);
-                            new_order.order_type = OrderType::GoodTillCancel;
+                            let slipped_price = match new_order.side {
+                                Side::Buy => market_price.saturating_add((market_price.saturating_mul(2)) / 100),
+                                Side::Sell => market_price.saturating_sub((market_price.saturating_mul(2)) / 100),
+                            };
+                            new_order.price = Some(slipped_price);
                         },
                         None => {
                             let seq = self.next_seq(&symbol);
@@ -103,14 +106,14 @@ impl Exchange {
                     }
                 }
 
-                let order_id = new_order.order_id;
-                let user_id = new_order.user_id;
-                let side = new_order.side;
-                let price = new_order.price.expect("order price is set");
-                let quantity = new_order.quantity;
-                let order_type = new_order.order_type;
+                let order = Order::from(new_order);
+                let order_id = order.order_id;
+                let user_id = order.user_id;
+                let side = order.side;
+                let price = order.price.expect("order price is set");
+                let quantity = order.initial_quantity;
+                let order_type = order.order_type;
                 let asset_id = symbol.get_quantity_unit().asset_id();
-                let order = Order::from(new_order.clone());
 
                 if !self.risk_engine.check_and_reserve(user_id as ExternalUserId, order) {
                     let seq = self.next_seq(&symbol);
@@ -129,7 +132,7 @@ impl Exchange {
                 }
 
                 let book = self.orderbooks.get_mut(&symbol).ok_or(ExchangeError::OrderBookAccessError(symbol))?;
-                match book.add_new_order(new_order) {
+                match book.add_order(order) {
                     Some(trades) => {
                         let seq = self.next_seq(&symbol);
                         self.event_tx
@@ -147,7 +150,9 @@ impl Exchange {
                             ))
                             .map_err(ExchangeError::ExchangeEventTrySendError)?;
 
-                        self.handle_trades(trades, symbol, asset_id, order_id)?;
+                        if !trades.is_empty() {
+                            self.handle_trades(trades, symbol, asset_id, order_id)?;
+                        }
                         Ok(())
                     },
                     None => {
@@ -176,7 +181,8 @@ impl Exchange {
                 if let Some(order) = book.cancel_order(order_id) {
                     let internal_id = self.risk_engine.get_internal_id(order.user_id as ExternalUserId);
                     let asset_id = symbol.get_quantity_unit().asset_id();
-                    self.risk_engine.release(internal_id, order_id, asset_id, order.side, order.get_price(), order.remaining_quantity);
+                    self.risk_engine
+                        .release(internal_id, order_id, asset_id, order.side, order.get_price(), order.remaining_quantity);
 
                     let seq = self.next_seq(&symbol);
                     self.event_tx
@@ -199,13 +205,8 @@ impl Exchange {
             ExchangeCommand::ModifyOrder(symbol, modify_order) => {
                 let book = self.orderbooks.get_mut(&symbol).ok_or(ExchangeError::OrderBookAccessError(symbol))?;
 
-                let (user_id, old_price, old_qty) = book
-                    .get_order(modify_order.order_id)
-                    .map(|o| (o.user_id, o.get_price(), o.get_remaining_quantity()))
-                    .unwrap_or((0, modify_order.price, modify_order.quantity));
-
                 match book.modify_order(modify_order) {
-                    Some(trades) => {
+                    Some((old_order, trades)) => {
                         let seq = self.next_seq(&symbol);
                         self.event_tx
                             .try_send(OrderBookEvent::OrderModified(
@@ -213,17 +214,19 @@ impl Exchange {
                                 symbol,
                                 OrderModifiedEvent {
                                     order_id: modify_order.order_id,
-                                    user_id,
+                                    user_id: old_order.user_id,
                                     side: modify_order.side,
-                                    old_price,
+                                    old_price: old_order.get_price(),
                                     new_price: modify_order.price,
-                                    old_qty,
+                                    old_qty: old_order.remaining_quantity,
                                     new_qty: modify_order.quantity,
                                 },
                             ))
                             .map_err(ExchangeError::ExchangeEventTrySendError)?;
-                        let asset_id = symbol.get_quantity_unit().asset_id();
-                        self.handle_trades(trades, symbol, asset_id, modify_order.order_id)?;
+                        if !trades.is_empty() {
+                            let asset_id = symbol.get_quantity_unit().asset_id();
+                            self.handle_trades(trades, symbol, asset_id, modify_order.order_id)?;
+                        }
                         Ok(())
                     },
                     None => {
@@ -234,11 +237,11 @@ impl Exchange {
                                 symbol,
                                 ModifyOrderRejectedEvent {
                                     order_id: modify_order.order_id,
-                                    user_id,
+                                    user_id: 0,
                                     side: modify_order.side,
-                                    old_price,
+                                    old_price: modify_order.price,
                                     new_price: modify_order.price,
-                                    old_qty,
+                                    old_qty: modify_order.quantity,
                                     new_qty: modify_order.quantity,
                                     reason: RejectReason::PostOnlyWouldCross,
                                 },
@@ -268,36 +271,53 @@ impl Exchange {
             },
         }
     }
+    #[inline(always)]
     pub fn handle_trades(&mut self, trades: Trades, symbol: Symbol, asset_id: AssetId, taker_order_id_param: OrderId) -> Result<(), ExchangeError> {
+        let mut last_ask_user = usize::MAX;
+        let mut last_ask_internal = 0;
+        let mut last_bid_user = usize::MAX;
+        let mut last_bid_internal = 0;
+
         for trade in trades {
-            let ask_internal_id = self.risk_engine.get_internal_id(trade.ask_trade.user_id as ExternalUserId);
-            let bid_internal_id = self.risk_engine.get_internal_id(trade.bid_trade.user_id as ExternalUserId);
+            let ask_user = trade.ask_trade.user_id as ExternalUserId;
+            let ask_internal_id = if ask_user == last_ask_user {
+                last_ask_internal
+            } else {
+                let id = self.risk_engine.get_internal_id(ask_user);
+                last_ask_user = ask_user;
+                last_ask_internal = id;
+                id
+            };
 
-            let buyer_fee = self
-                .risk_engine
-                .settle(
-                    bid_internal_id,
-                    trade.bid_trade.order_id,
-                    asset_id,
-                    Side::Buy,
-                    trade.bid_trade.price,
-                    trade.bid_trade.quantity,
-                )
-                .unwrap_or(0);
+            let bid_user = trade.bid_trade.user_id as ExternalUserId;
+            let bid_internal_id = if bid_user == last_bid_user {
+                last_bid_internal
+            } else {
+                let id = self.risk_engine.get_internal_id(bid_user);
+                last_bid_user = bid_user;
+                last_bid_internal = id;
+                id
+            };
 
-            let seller_fee = self
-                .risk_engine
-                .settle(
-                    ask_internal_id,
-                    trade.ask_trade.order_id,
-                    asset_id,
-                    Side::Sell,
-                    trade.ask_trade.price,
-                    trade.ask_trade.quantity,
-                )
-                .unwrap_or(0);
+            self.risk_engine.settle(
+                bid_internal_id,
+                trade.bid_trade.order_id,
+                asset_id,
+                Side::Buy,
+                trade.bid_trade.price,
+                trade.bid_trade.quantity,
+            );
 
-            let (maker_order_id, taker_order_id, maker_user_id, taker_user_id, maker_side, taker_side, maker_fee, taker_fee) =
+            self.risk_engine.settle(
+                ask_internal_id,
+                trade.ask_trade.order_id,
+                asset_id,
+                Side::Sell,
+                trade.ask_trade.price,
+                trade.ask_trade.quantity,
+            );
+
+            let (maker_order_id, taker_order_id, maker_user_id, taker_user_id, maker_side, taker_side, maker_remaining_qty, taker_remaining_qty) =
                 if trade.bid_trade.order_id == taker_order_id_param {
                     (
                         trade.ask_trade.order_id,
@@ -306,8 +326,8 @@ impl Exchange {
                         trade.bid_trade.user_id,
                         Side::Sell,
                         Side::Buy,
-                        seller_fee,
-                        buyer_fee,
+                        trade.ask_trade.remaining_quantity,
+                        trade.bid_trade.remaining_quantity,
                     )
                 } else {
                     (
@@ -317,24 +337,10 @@ impl Exchange {
                         trade.ask_trade.user_id,
                         Side::Buy,
                         Side::Sell,
-                        buyer_fee,
-                        seller_fee,
+                        trade.bid_trade.remaining_quantity,
+                        trade.ask_trade.remaining_quantity,
                     )
                 };
-
-            let maker_remaining_qty = self
-                .orderbooks
-                .get(&symbol)
-                .and_then(|b| b.get_order(maker_order_id))
-                .map(|o| o.get_remaining_quantity())
-                .unwrap_or(0);
-
-            let taker_remaining_qty = self
-                .orderbooks
-                .get(&symbol)
-                .and_then(|b| b.get_order(taker_order_id))
-                .map(|o| o.get_remaining_quantity())
-                .unwrap_or(0);
 
             let seq = self.next_seq(&symbol);
             let trade_id = seq;
@@ -354,8 +360,6 @@ impl Exchange {
                         quantity: trade.ask_trade.quantity,
                         maker_remaining_qty,
                         taker_remaining_qty,
-                        maker_fee,
-                        taker_fee,
                     },
                 ))
                 .map_err(ExchangeError::ExchangeEventTrySendError)?;
@@ -509,8 +513,6 @@ mod tests {
                         quantity: 1,
                         maker_remaining_qty: 0,
                         taker_remaining_qty: 0,
-                        maker_fee: 0,
-                        taker_fee: 0,
                     },
                 ),
             ]
@@ -996,14 +998,12 @@ mod tests {
                     quantity: 10_000,
                     maker_remaining_qty: 0,
                     taker_remaining_qty: 0,
-                    maker_fee: 100,
-                    taker_fee: 5,
                 },
             )
         );
 
         let ex_acc = exchange.get_exchange_account();
-        assert_eq!(ex_acc.available_balance, 100);
-        assert_eq!(ex_acc.holdings.get_available_quantity(asset_id), Some(5));
+        assert_eq!(ex_acc.available_balance, 0);
+        assert_eq!(ex_acc.holdings.get_available_quantity(asset_id).unwrap_or(0), 0);
     }
 }

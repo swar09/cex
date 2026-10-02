@@ -1,7 +1,7 @@
 use disruptor::{EventPoller, MultiConsumerBarrier, Polling, Producer, SingleProducer, SingleProducerBarrier};
 use domain::{
-    ExpredOrders, ModifyOrderRejectedEvent, OrderCancelledEvent, OrderId, OrderModifiedEvent, OrderPlacedEvent,
-    OrderRejectedEvent, OrderType, Price, Quantity, Side, Symbol, TradeExecutedEvent,
+    ExpredOrders, ModifyOrderRejectedEvent, OrderCancelledEvent, OrderId, OrderModifiedEvent, OrderPlacedEvent, OrderRejectedEvent, OrderType, Price,
+    Quantity, Side, Symbol, TradeExecutedEvent,
 };
 use serde::Serialize;
 
@@ -289,8 +289,8 @@ impl EventConsumer {
 mod tests {
     use disruptor::{BusySpin, build_single_producer};
     use domain::{
-        CancelReason, ModifyOrderRejectedEvent, OrderCancelledEvent, OrderModifiedEvent, OrderPlacedEvent,
-        OrderRejectedEvent, OrderType, RejectReason, Side, TradeExecutedEvent,
+        CancelReason, ModifyOrderRejectedEvent, OrderCancelledEvent, OrderModifiedEvent, OrderPlacedEvent, OrderRejectedEvent, OrderType,
+        RejectReason, Side, TradeExecutedEvent,
     };
 
     use super::*;
@@ -335,8 +335,6 @@ mod tests {
                 quantity: 5,
                 maker_remaining_qty: 5,
                 taker_remaining_qty: 0,
-                maker_fee: 2,
-                taker_fee: 2,
             },
         );
         assert_eq!(trade.symbol(), Some(Symbol::BtcInr));
@@ -479,8 +477,6 @@ mod tests {
                 quantity: 2,
                 maker_remaining_qty: 0,
                 taker_remaining_qty: 0,
-                maker_fee: 2,
-                taker_fee: 2,
             },
         );
 
@@ -591,8 +587,6 @@ mod tests {
                 quantity: 1,
                 maker_remaining_qty: 1,
                 taker_remaining_qty: 0,
-                maker_fee: 2,
-                taker_fee: 2,
             },
         );
         let log = trade.to_log_data().unwrap();
