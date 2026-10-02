@@ -1,20 +1,147 @@
-use std::{
-    cell::RefCell,
-    cmp::{Reverse, min},
-    collections::BTreeMap,
-    rc::Rc,
-};
+use std::cmp::{Reverse, min};
+use std::collections::BTreeMap;
 
 use domain::{
     NewOrder, Order, Quantity,
-    level::PriceLevel,
-    orders::{ModifyOrder, OrderIds, OrderPointer, OrderType},
+    orders::{ModifyOrder, OrderIds, OrderType},
     types::{OrderId, Price, Side, Trade, TradeInfo, Trades},
 };
 use fxhash::FxHashMap;
+use slab::Slab;
 
+const INIT_SLAB_CAPACITY: usize = 10_000;
+
+#[derive(Clone, Copy, Debug)]
+pub struct PriceLevelNode {
+    pub order: Order,
+    pub prev: usize,
+    pub next: usize,
+}
+
+impl std::ops::Deref for PriceLevelNode {
+    type Target = Order;
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.order
+    }
+}
+
+impl std::ops::DerefMut for PriceLevelNode {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.order
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct PriceLevel {
+    pub price: Price,
+    pub orders: Slab<PriceLevelNode>,
+    pub head: usize,
+    pub tail: usize,
+    pub total_quantity: Quantity,
+}
+
+impl PriceLevel {
+    pub fn new() -> Self {
+        Self {
+            price: 0,
+            orders: Slab::with_capacity(INIT_SLAB_CAPACITY),
+            head: usize::MAX,
+            tail: usize::MAX,
+            total_quantity: 0,
+        }
+    }
+
+    pub fn with_price(price: Price) -> Self {
+        Self {
+            price,
+            orders: Slab::with_capacity(INIT_SLAB_CAPACITY),
+            head: usize::MAX,
+            tail: usize::MAX,
+            total_quantity: 0,
+        }
+    }
+
+    #[inline(always)]
+    pub fn insert(&mut self, order: Order) -> usize {
+        self.total_quantity += order.remaining_quantity;
+        let key = self.orders.insert(PriceLevelNode {
+            order,
+            prev: self.tail,
+            next: usize::MAX,
+        });
+        if self.tail != usize::MAX {
+            self.orders[self.tail].next = key;
+        } else {
+            self.head = key;
+        }
+        self.tail = key;
+        key
+    }
+
+    #[inline(always)]
+    pub fn remove(&mut self, key: usize) -> Order {
+        let node = self.orders.remove(key);
+        self.total_quantity -= node.order.remaining_quantity;
+        if node.prev != usize::MAX {
+            self.orders[node.prev].next = node.next;
+        } else {
+            self.head = node.next;
+        }
+        if node.next != usize::MAX {
+            self.orders[node.next].prev = node.prev;
+        } else {
+            self.tail = node.prev;
+        }
+        node.order
+    }
+
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        self.orders.is_empty()
+    }
+
+    #[inline(always)]
+    pub fn front(&self) -> Option<&Order> {
+        if self.head == usize::MAX {
+            None
+        } else {
+            Some(&self.orders[self.head].order)
+        }
+    }
+
+    #[inline(always)]
+    pub fn front_mut(&mut self) -> Option<&mut Order> {
+        if self.head == usize::MAX {
+            None
+        } else {
+            Some(&mut self.orders[self.head].order)
+        }
+    }
+
+    #[inline(always)]
+    pub fn pop_front(&mut self) -> Option<Order> {
+        if self.head == usize::MAX {
+            None
+        } else {
+            Some(self.remove(self.head))
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Order> {
+        self.orders.iter().map(|(_, n)| &n.order)
+    }
+}
+
+impl Default for PriceLevel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OrderEntry {
-    pub order: OrderPointer,
     pub price: Price,
     pub side: Side,
     pub slab_key: usize,
@@ -26,17 +153,7 @@ pub struct OrderBook {
     pub asks: BTreeMap<Price, PriceLevel>,          // lowest price first
     pub bids: BTreeMap<Reverse<Price>, PriceLevel>, // highest price first
     pub orders: FxHashMap<OrderId, OrderEntry>,
-    pub data: FxHashMap<Price, LevelData>,
     pub last_trade_price: Option<Price>,
-}
-
-pub struct LevelData {
-    pub quantity: Quantity,
-}
-pub enum LevelDataAction {
-    Add,
-    Remove,
-    Match,
 }
 
 impl OrderBook {
@@ -45,11 +162,24 @@ impl OrderBook {
             bids: BTreeMap::new(),
             asks: BTreeMap::new(),
             orders: FxHashMap::default(),
-            data: FxHashMap::default(),
             last_trade_price: None,
         }
     }
 
+    #[inline]
+    pub fn get_order(&self, order_id: OrderId) -> Option<&Order> {
+        let entry = self.orders.get(&order_id)?;
+        match entry.side {
+            Side::Buy => self.bids.get(&Reverse(entry.price)).and_then(|l| l.orders.get(entry.slab_key)).map(|n| &n.order),
+            Side::Sell => self.asks.get(&entry.price).and_then(|l| l.orders.get(entry.slab_key)).map(|n| &n.order),
+        }
+    }
+
+    pub fn iter_orders(&self) -> impl Iterator<Item = &Order> {
+        self.asks.values().flat_map(|l| l.iter()).chain(self.bids.values().flat_map(|l| l.iter()))
+    }
+
+    #[inline]
     pub fn get_market_price(&self, side: Side) -> Option<Price> {
         match side {
             Side::Buy => self.asks.first_key_value().map(|(p, _)| *p).or(self.last_trade_price),
@@ -57,34 +187,30 @@ impl OrderBook {
         }
     }
 
+    #[inline(always)]
     pub fn len(&self) -> usize {
         self.orders.len()
     }
 
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
-        if self.asks.is_empty() || self.bids.is_empty() || self.orders.is_empty() {
-            return true;
-        }
-        false
+        self.orders.is_empty()
     }
 
+    #[inline]
     pub fn can_match(&self, side: Side, price: Price) -> bool {
         match side {
             Side::Buy => {
-                // no one is selling
                 if self.asks.is_empty() {
                     return false;
                 }
-
                 let best_ask = self.asks.first_key_value().expect("asks empty checked above");
                 price >= *best_ask.0
             },
             Side::Sell => {
-                // no one is buying
                 if self.bids.is_empty() {
                     return false;
                 }
-
                 let (best_bid_price, _) = self.bids.first_key_value().expect("bids empty check above");
                 price <= best_bid_price.0
             },
@@ -107,12 +233,19 @@ impl OrderBook {
             }
 
             while !self.bids.is_empty() && !self.asks.is_empty() {
+                let current_bid_price = self.bids.first_key_value().expect("bids empty check above").0.0;
+                let current_ask_price = *self.asks.first_key_value().expect("asks empty check above").0;
+
+                if current_bid_price < current_ask_price {
+                    break;
+                }
+
                 let (bid_user_id, bid_order_id, ask_user_id, ask_order_id) = {
                     let (_, bid_level) = self.bids.first_key_value().expect("bids empty check above");
                     let (_, ask_level) = self.asks.first_key_value().expect("asks empty check above");
 
-                    let bid = bid_level.front().expect("can not get order_pointer").borrow();
-                    let ask = ask_level.front().expect("can not get order_pointer").borrow();
+                    let bid = bid_level.front().expect("cannot get bid order");
+                    let ask = ask_level.front().expect("cannot get ask order");
 
                     (bid.get_user_id(), bid.get_order_id(), ask.get_user_id(), ask.get_order_id())
                 };
@@ -124,42 +257,56 @@ impl OrderBook {
                 }
 
                 let (bid_filled, bid_order_id, bid_user_id, ask_filled, ask_order_id, ask_user_id, quantity) = {
-                    let (_, bid_level) = self.bids.first_key_value().expect("bids empty check above");
-                    let (_, ask_level) = self.asks.first_key_value().expect("asks empty check above");
+                    let mut bid_entry = self.bids.first_entry().expect("bids empty check above");
+                    let mut ask_entry = self.asks.first_entry().expect("asks empty check above");
 
-                    let mut bid = bid_level.front().expect("can not get order_pointer").borrow_mut();
-                    let mut ask = ask_level.front().expect("can not get order_pointer").borrow_mut();
+                    let bid_level = bid_entry.get_mut();
+                    let ask_level = ask_entry.get_mut();
 
-                    let quantity = min(bid.get_remaining_quantity(), ask.get_remaining_quantity());
+                    let bid_head = bid_level.head;
+                    let ask_head = ask_level.head;
 
-                    bid.fill(quantity);
-                    ask.fill(quantity);
+                    let quantity = min(
+                        bid_level.orders[bid_head].get_remaining_quantity(),
+                        ask_level.orders[ask_head].get_remaining_quantity(),
+                    );
+
+                    bid_level.orders[bid_head].fill(quantity);
+                    bid_level.total_quantity -= quantity;
+                    let bid_filled = bid_level.orders[bid_head].is_filled();
+                    let bid_order_id = bid_level.orders[bid_head].get_order_id();
+                    let bid_user_id = bid_level.orders[bid_head].get_user_id();
+
+                    ask_level.orders[ask_head].fill(quantity);
+                    ask_level.total_quantity -= quantity;
+                    let ask_filled = ask_level.orders[ask_head].is_filled();
+                    let ask_order_id = ask_level.orders[ask_head].get_order_id();
+                    let ask_user_id = ask_level.orders[ask_head].get_user_id();
 
                     (
-                        bid.is_filled(),
-                        bid.get_order_id(),
-                        bid.get_user_id(),
-                        ask.is_filled(),
-                        ask.get_order_id(),
-                        ask.get_user_id(),
+                        bid_filled,
+                        bid_order_id,
+                        bid_user_id,
+                        ask_filled,
+                        ask_order_id,
+                        ask_user_id,
                         quantity,
                     )
                 };
-                self.on_order_matched(bid_price, quantity);
-                self.on_order_matched(ask_price, quantity);
-                self.last_trade_price = Some(ask_price);
+
+                self.last_trade_price = Some(current_ask_price);
 
                 trades.push(Trade {
                     bid_trade: TradeInfo {
                         order_id: bid_order_id,
                         user_id: bid_user_id,
-                        price: bid_price,
+                        price: current_bid_price,
                         quantity,
                     },
                     ask_trade: TradeInfo {
                         order_id: ask_order_id,
                         user_id: ask_user_id,
-                        price: ask_price,
+                        price: current_ask_price,
                         quantity,
                     },
                 });
@@ -169,10 +316,6 @@ impl OrderBook {
                     level.pop_front();
                     if level.is_empty() {
                         self.bids.pop_first();
-                        // Only remove the shared data entry if no ask rests at the same price
-                        if !self.asks.contains_key(&bid_price) {
-                            self.data.remove(&bid_price);
-                        }
                     }
                     self.orders.remove(&bid_order_id);
                 }
@@ -182,10 +325,6 @@ impl OrderBook {
                     level.pop_front();
                     if level.is_empty() {
                         self.asks.pop_first();
-                        // Only remove the shared data entry if no bid rests at the same price
-                        if !self.bids.contains_key(&Reverse(ask_price)) {
-                            self.data.remove(&ask_price);
-                        }
                     }
                     self.orders.remove(&ask_order_id);
                 }
@@ -194,63 +333,50 @@ impl OrderBook {
 
         if !self.bids.is_empty() {
             let (_, bid_level) = self.bids.first_key_value().expect("bids empty check above");
-            let order = bid_level.front().expect("can not get order_pointer").borrow();
-            match order.get_order_type() {
-                OrderType::FillAndKill => {
-                    let order_id = order.get_order_id();
-                    drop(order);
-                    self.cancel_order(order_id);
-                },
-                OrderType::FillOrKill => {},
-                OrderType::GoodTillCancel => {},
-                OrderType::GoodForDay => {},
-                OrderType::Market => {},
+            if let Some(order) = bid_level.front()
+                && order.get_order_type() == OrderType::FillAndKill
+            {
+                let order_id = order.get_order_id();
+                self.cancel_order(order_id);
             }
         }
 
         if !self.asks.is_empty() {
             let (_, ask_level) = self.asks.first_key_value().expect("asks empty check above");
-            let order = ask_level.front().expect("can not get order_pointer").borrow();
-            match order.get_order_type() {
-                OrderType::FillAndKill => {
-                    let order_id = order.get_order_id();
-                    drop(order);
-                    self.cancel_order(order_id);
-                },
-                OrderType::FillOrKill => {},
-                OrderType::GoodTillCancel => {},
-                OrderType::GoodForDay => {},
-                OrderType::Market => {},
+            if let Some(order) = ask_level.front()
+                && order.get_order_type() == OrderType::FillAndKill
+            {
+                let order_id = order.get_order_id();
+                self.cancel_order(order_id);
             }
         }
         trades
     }
 
+    #[inline]
     pub fn add_new_order(&mut self, order: NewOrder) -> Option<Trades> {
-        let order_pointer = Rc::new(RefCell::new(Order::from(order)));
-        self.add_order(order_pointer)
+        self.add_order(Order::from(order))
     }
 
-    pub fn add_order(&mut self, order: OrderPointer) -> Option<Trades> {
-        let (order_type, order_id, order_side, _order_initial_quantity) = {
-            let o = order.borrow();
-            (o.get_order_type(), o.get_order_id(), o.get_side(), o.get_initial_quantity())
-        };
+    pub fn add_order(&mut self, mut order: Order) -> Option<Trades> {
+        let order_type = order.get_order_type();
+        let order_id = order.get_order_id();
+        let order_side = order.get_side();
 
         if order_type == OrderType::Market {
             if order_side == Side::Buy && !self.asks.is_empty() {
                 let worst_ask_price = *self.asks.first_entry().expect("asks not empty check above").key();
-                order.borrow_mut().to_good_till_cancel(worst_ask_price);
+                order.to_good_till_cancel(worst_ask_price);
             } else if order_side == Side::Sell && !self.bids.is_empty() {
                 let Reverse(worst_bid_price) = *self.bids.first_entry().expect("bids not empty check above").key();
-                order.borrow_mut().to_good_till_cancel(worst_bid_price);
+                order.to_good_till_cancel(worst_bid_price);
             } else {
                 let last_price = self.last_trade_price?;
-                order.borrow_mut().to_good_till_cancel(last_price);
+                order.to_good_till_cancel(last_price);
             }
         }
 
-        let order_price = order.borrow().get_price();
+        let order_price = order.get_price();
 
         if self.orders.contains_key(&order_id) {
             return None;
@@ -260,78 +386,61 @@ impl OrderBook {
         }
 
         let slab_key = match order_side {
-            Side::Buy => self.bids.entry(Reverse(order_price)).or_default().insert(order.clone()),
-            Side::Sell => self.asks.entry(order_price).or_default().insert(order.clone()),
+            Side::Buy => self.bids.entry(Reverse(order_price)).or_default().insert(order),
+            Side::Sell => self.asks.entry(order_price).or_default().insert(order),
         };
-        self.data.entry(order_price).or_insert(LevelData { quantity: 0 });
 
         self.orders.insert(
             order_id,
             OrderEntry {
-                order: order.clone(),
                 price: order_price,
                 side: order_side,
                 slab_key,
             },
         );
-        self.on_order_added(order_price, order.borrow().get_initial_quantity());
         Some(self.match_orders())
     }
 
-    pub fn cancel_order(&mut self, order_id: OrderId) -> bool {
-        let Some(order_entry) = self.orders.remove(&order_id) else {
-            return false;
-        };
-        let remaining_quantity = order_entry.order.borrow().get_remaining_quantity();
+    pub fn cancel_order(&mut self, order_id: OrderId) -> Option<Order> {
+        let order_entry = self.orders.remove(&order_id)?;
 
-        match order_entry.side {
+        let order = match order_entry.side {
             Side::Buy => {
                 let level = self
                     .bids
                     .get_mut(&Reverse(order_entry.price))
                     .expect("Order & PriceLevel exists check above");
-                level.remove(order_entry.slab_key);
+                let removed = level.remove(order_entry.slab_key);
                 if level.is_empty() {
                     self.bids.remove(&Reverse(order_entry.price));
-                    self.data.remove(&order_entry.price);
                 }
-                self.on_order_cancelled(order_entry.price, remaining_quantity);
-                true
+                removed
             },
             Side::Sell => {
                 let level = self.asks.get_mut(&order_entry.price).expect("Order & PriceLevel exists check above");
-                level.remove(order_entry.slab_key);
+                let removed = level.remove(order_entry.slab_key);
                 if level.is_empty() {
                     self.asks.remove(&order_entry.price);
-                    self.data.remove(&order_entry.price);
                 }
-                self.on_order_cancelled(order_entry.price, remaining_quantity);
-                true
+                removed
             },
-        }
+        };
+        Some(order)
     }
 
     pub fn modify_order(&mut self, modify_order: ModifyOrder) -> Option<Trades> {
-        if !self.orders.contains_key(&modify_order.order_id) {
-            return None;
-        }
-        let existing_order_entry = self.orders.get(&modify_order.order_id).expect("OrderEntry not empty exists check above");
-        let (order_type, user_id, asset_id) = {
-            let o = existing_order_entry.order.borrow();
-            (o.get_order_type(), o.user_id, o.asset_id)
-        };
-        self.cancel_order(modify_order.order_id);
+        let old_order = self.cancel_order(modify_order.order_id)?;
         let order = Order {
             order_id: modify_order.get_order_id(),
-            user_id,
-            asset_id,
+            user_id: old_order.user_id,
+            asset_id: old_order.asset_id,
             price: Some(modify_order.get_price()),
             initial_quantity: modify_order.get_quantity(),
             remaining_quantity: modify_order.get_quantity(),
-            order_type,
+            order_type: old_order.order_type,
             side: modify_order.get_side(),
         };
-        self.add_order(Rc::new(RefCell::new(order)))
+        self.add_order(order)
     }
 
     pub fn cancel_orders(&mut self, order_ids: OrderIds) {
@@ -339,69 +448,37 @@ impl OrderBook {
             self.cancel_order(order_id);
         }
     }
+
     pub fn can_fully_fill(&self, side: Side, price: Price, mut quantity: Quantity) -> bool {
         if !self.can_match(side, price) {
             return false;
         }
-        let (threshold, _price_level) = match side {
+
+        match side {
             Side::Buy => {
-                let (ask_price, price_level) = self.asks.first_key_value().expect("asks not empty check above");
-                (ask_price, price_level)
+                for (&ask_price, level) in self.asks.iter() {
+                    if ask_price > price {
+                        break;
+                    }
+                    if quantity <= level.total_quantity {
+                        return true;
+                    }
+                    quantity -= level.total_quantity;
+                }
             },
             Side::Sell => {
-                let (Reverse(bid_price), price_level) = self.bids.first_key_value().expect("bids not empty check above");
-                (bid_price, price_level)
+                for (&Reverse(bid_price), level) in self.bids.iter() {
+                    if bid_price < price {
+                        break;
+                    }
+                    if quantity <= level.total_quantity {
+                        return true;
+                    }
+                    quantity -= level.total_quantity;
+                }
             },
-        };
-
-        for (level_price, level_data) in self.data.iter() {
-            if (side == Side::Buy && threshold > level_price) || (side == Side::Sell && threshold < level_price) {
-                continue;
-            }
-
-            if (side == Side::Buy && *level_price > price) || (side == Side::Sell && *level_price < price) {
-                continue;
-            }
-
-            if quantity <= level_data.quantity {
-                return true;
-            }
-
-            quantity -= level_data.quantity;
         }
         false
-    }
-    // events to maintain data
-    pub fn on_order_cancelled(&mut self, price: Price, quantity: Quantity) {
-        let Some(level_data) = self.data.get_mut(&price) else {
-            return;
-        };
-        level_data.quantity -= quantity;
-    }
-    pub fn on_order_matched(&mut self, price: Price, quantity: Quantity) {
-        let Some(level_data) = self.data.get_mut(&price) else {
-            return;
-        };
-        level_data.quantity -= quantity;
-    }
-    pub fn on_order_added(&mut self, price: Price, quantity: Quantity) {
-        let Some(level_data) = self.data.get_mut(&price) else {
-            return;
-        };
-        level_data.quantity += quantity;
-    }
-    pub fn update_level_data(&mut self, price: Price, quantity: Quantity, action: LevelDataAction) {
-        let Some(_level_data) = self.data.get_mut(&price) else {
-            return;
-        };
-        match action {
-            LevelDataAction::Add => {
-                self.on_order_added(price, quantity);
-            },
-            _ => {
-                self.on_order_cancelled(price, quantity);
-            },
-        }
     }
 }
 
@@ -413,8 +490,6 @@ impl Default for OrderBook {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, rc::Rc};
-
     use domain::{
         orders::{Order, OrderType},
         types::{OrderId, Price, Quantity, Side},
@@ -422,8 +497,8 @@ mod tests {
 
     use super::*;
 
-    fn make_order(id: OrderId, side: Side, price: Price, qty: Quantity, order_type: OrderType) -> OrderPointer {
-        Rc::new(RefCell::new(Order {
+    fn make_order(id: OrderId, side: Side, price: Price, qty: Quantity, order_type: OrderType) -> Order {
+        Order {
             order_id: id,
             user_id: id,
             asset_id: 1,
@@ -432,22 +507,22 @@ mod tests {
             remaining_quantity: qty,
             order_type,
             side,
-        }))
+        }
     }
 
-    fn gtc_buy(id: OrderId, price: Price, qty: Quantity) -> OrderPointer {
+    fn gtc_buy(id: OrderId, price: Price, qty: Quantity) -> Order {
         make_order(id, Side::Buy, price, qty, OrderType::GoodTillCancel)
     }
 
-    fn gtc_sell(id: OrderId, price: Price, qty: Quantity) -> OrderPointer {
+    fn gtc_sell(id: OrderId, price: Price, qty: Quantity) -> Order {
         make_order(id, Side::Sell, price, qty, OrderType::GoodTillCancel)
     }
 
-    fn fak_buy(id: OrderId, price: Price, qty: Quantity) -> OrderPointer {
+    fn fak_buy(id: OrderId, price: Price, qty: Quantity) -> Order {
         make_order(id, Side::Buy, price, qty, OrderType::FillAndKill)
     }
 
-    fn fak_sell(id: OrderId, price: Price, qty: Quantity) -> OrderPointer {
+    fn fak_sell(id: OrderId, price: Price, qty: Quantity) -> Order {
         make_order(id, Side::Sell, price, qty, OrderType::FillAndKill)
     }
 
@@ -586,7 +661,7 @@ mod tests {
         // bid still alive with 10 remaining
         assert!(book.orders.contains_key(&1));
         assert!(!book.orders.contains_key(&2)); // ask fully filled
-        assert_eq!(book.orders[&1].order.borrow().get_remaining_quantity(), 10);
+        assert_eq!(book.get_order(1).unwrap().get_remaining_quantity(), 10);
     }
 
     #[test]
@@ -597,7 +672,7 @@ mod tests {
 
         assert!(!book.orders.contains_key(&1)); // bid fully filled
         assert!(book.orders.contains_key(&2)); // ask remains
-        assert_eq!(book.orders[&2].order.borrow().get_remaining_quantity(), 10);
+        assert_eq!(book.get_order(2).unwrap().get_remaining_quantity(), 10);
     }
 
     #[test]
@@ -711,8 +786,8 @@ mod tests {
         let key3 = book.orders[&3].slab_key;
 
         // slab keys still valid
-        assert_eq!(level.orders[key1].borrow().get_order_id(), 1);
-        assert_eq!(level.orders[key3].borrow().get_order_id(), 3);
+        assert_eq!(level.orders[key1].get_order_id(), 1);
+        assert_eq!(level.orders[key3].get_order_id(), 3);
     }
 
     #[test]
@@ -847,7 +922,7 @@ mod tests {
     fn test_self_trade_prevention_cancels_both_orders() {
         let mut book = OrderBook::new();
         let user_id = 42;
-        let buy = Rc::new(RefCell::new(Order {
+        let buy = Order {
             order_id: 1,
             user_id,
             asset_id: 1,
@@ -856,8 +931,8 @@ mod tests {
             remaining_quantity: 10,
             order_type: OrderType::GoodTillCancel,
             side: Side::Buy,
-        }));
-        let sell = Rc::new(RefCell::new(Order {
+        };
+        let sell = Order {
             order_id: 2,
             user_id,
             asset_id: 1,
@@ -866,7 +941,7 @@ mod tests {
             remaining_quantity: 10,
             order_type: OrderType::GoodTillCancel,
             side: Side::Sell,
-        }));
+        };
 
         book.add_order(buy);
         assert_eq!(book.len(), 1);

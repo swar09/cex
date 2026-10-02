@@ -1,5 +1,3 @@
-use std::{cell::RefCell, rc::Rc};
-
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -19,9 +17,6 @@ pub enum OrderType {
     GoodForDay,
     Market,
 }
-
-// elminate the heap alloc at the hot path
-pub type OrderPointer = Rc<RefCell<Order>>;
 
 #[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Order {
@@ -75,33 +70,43 @@ impl Order {
         }
     }
 
+    #[inline(always)]
     pub fn get_order_id(&self) -> OrderId {
         self.order_id
     }
+    #[inline(always)]
     pub fn get_user_id(&self) -> UserId {
         self.user_id
     }
+    #[inline(always)]
     pub fn get_asset_id(&self) -> AssetId {
         self.asset_id
     }
+    #[inline(always)]
     pub fn get_side(&self) -> Side {
         self.side
     }
+    #[inline(always)]
     pub fn get_price(&self) -> Price {
         self.price.unwrap() // intentional 
     }
+    #[inline(always)]
     pub fn get_order_type(&self) -> OrderType {
         self.order_type
     }
+    #[inline(always)]
     pub fn get_initial_quantity(&self) -> Quantity {
         self.initial_quantity
     }
+    #[inline(always)]
     pub fn get_remaining_quantity(&self) -> Quantity {
         self.remaining_quantity
     }
+    #[inline(always)]
     pub fn get_filled_quantity(&self) -> Quantity {
         self.initial_quantity - self.remaining_quantity
     }
+    #[inline(always)]
     pub fn fill(&mut self, quantity: Quantity) {
         if quantity > self.get_remaining_quantity() {
             eprintln!(
@@ -113,6 +118,7 @@ impl Order {
         self.remaining_quantity -= quantity;
     }
 
+    #[inline(always)]
     pub fn is_filled(&self) -> bool {
         self.get_remaining_quantity() == 0
     }
@@ -139,32 +145,22 @@ pub struct ModifyOrder {
 }
 
 impl ModifyOrder {
+    #[inline(always)]
     pub fn get_order_id(&self) -> OrderId {
         self.order_id
     }
+    #[inline(always)]
     pub fn get_side(&self) -> Side {
         self.side
     }
+    #[inline(always)]
     pub fn get_price(&self) -> Price {
         self.price
     }
 
+    #[inline(always)]
     pub fn get_quantity(&self) -> Quantity {
         self.quantity
-    }
-
-    pub fn to_order_pointer(&self, order_type: OrderType) -> OrderPointer {
-        let order = Order {
-            order_id: self.get_order_id(),
-            user_id: 0,
-            asset_id: 0,
-            price: Some(self.get_price()),
-            initial_quantity: self.get_quantity(),
-            remaining_quantity: self.get_quantity(),
-            order_type,
-            side: self.get_side(),
-        };
-        Rc::new(RefCell::new(order))
     }
 }
 

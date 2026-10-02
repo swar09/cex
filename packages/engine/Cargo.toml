@@ -12,3 +12,4 @@ disruptor = "4.4.0"
 serde = "1.0.229"
 smallvec = { version = "1.13", features = ["serde"] }
 fxhash = "0.2.1"
+slab = "0.4.12"

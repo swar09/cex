@@ -173,17 +173,10 @@ impl Exchange {
             ExchangeCommand::CancelOrder(symbol, order_id) => {
                 let book = self.orderbooks.get_mut(&symbol).ok_or(ExchangeError::OrderBookAccessError(symbol))?;
 
-                let order_info = book.orders.get(&order_id).map(|entry| {
-                    let o = entry.order.borrow();
-                    (o.user_id, o.side, o.get_price(), o.remaining_quantity)
-                });
-
-                if book.cancel_order(order_id)
-                    && let Some((user_id, side, price, remaining_qty)) = order_info
-                {
-                    let internal_id = self.risk_engine.get_internal_id(user_id as ExternalUserId);
+                if let Some(order) = book.cancel_order(order_id) {
+                    let internal_id = self.risk_engine.get_internal_id(order.user_id as ExternalUserId);
                     let asset_id = symbol.get_quantity_unit().asset_id();
-                    self.risk_engine.release(internal_id, order_id, asset_id, side, price, remaining_qty);
+                    self.risk_engine.release(internal_id, order_id, asset_id, order.side, order.get_price(), order.remaining_quantity);
 
                     let seq = self.next_seq(&symbol);
                     self.event_tx
@@ -192,10 +185,10 @@ impl Exchange {
                             symbol,
                             OrderCancelledEvent {
                                 order_id,
-                                user_id,
-                                side,
-                                price,
-                                cancelled_qty: remaining_qty,
+                                user_id: order.user_id,
+                                side: order.side,
+                                price: order.get_price(),
+                                cancelled_qty: order.remaining_quantity,
                                 reason: CancelReason::UserRequested,
                             },
                         ))
@@ -207,12 +200,8 @@ impl Exchange {
                 let book = self.orderbooks.get_mut(&symbol).ok_or(ExchangeError::OrderBookAccessError(symbol))?;
 
                 let (user_id, old_price, old_qty) = book
-                    .orders
-                    .get(&modify_order.order_id)
-                    .map(|e| {
-                        let o = e.order.borrow();
-                        (o.user_id, o.get_price(), o.get_remaining_quantity())
-                    })
+                    .get_order(modify_order.order_id)
+                    .map(|o| (o.user_id, o.get_price(), o.get_remaining_quantity()))
                     .unwrap_or((0, modify_order.price, modify_order.quantity));
 
                 match book.modify_order(modify_order) {
@@ -263,8 +252,7 @@ impl Exchange {
                 let book = self.orderbooks.get_mut(&symbol).ok_or(ExchangeError::OrderBookAccessError(symbol))?;
                 let mut expired_orders: domain::ExpredOrders = vec![];
                 let mut order_ids: OrderIds = vec![];
-                for order_entry in book.orders.values() {
-                    let o = order_entry.order.borrow();
+                for o in book.iter_orders() {
                     if o.get_order_type() != prune_order_type {
                         continue;
                     }
@@ -337,15 +325,15 @@ impl Exchange {
             let maker_remaining_qty = self
                 .orderbooks
                 .get(&symbol)
-                .and_then(|b| b.orders.get(&maker_order_id))
-                .map(|e| e.order.borrow().get_remaining_quantity())
+                .and_then(|b| b.get_order(maker_order_id))
+                .map(|o| o.get_remaining_quantity())
                 .unwrap_or(0);
 
             let taker_remaining_qty = self
                 .orderbooks
                 .get(&symbol)
-                .and_then(|b| b.orders.get(&taker_order_id))
-                .map(|e| e.order.borrow().get_remaining_quantity())
+                .and_then(|b| b.get_order(taker_order_id))
+                .map(|o| o.get_remaining_quantity())
                 .unwrap_or(0);
 
             let seq = self.next_seq(&symbol);

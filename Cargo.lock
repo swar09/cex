@@ -470,6 +470,7 @@ dependencies = [
  "fxhash",
  "risk",
  "serde",
+ "slab",
  "smallvec 1.16.2",
  "thiserror 2.0.21",
 ]

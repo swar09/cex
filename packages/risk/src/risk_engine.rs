@@ -35,6 +35,7 @@ pub enum AccountType {
 }
 
 impl AccountType {
+    #[inline(always)]
     pub fn fee_bps(&self) -> u64 {
         match self {
             Self::ExchangeAccount => EXCHANGE_FEE_BPS,
@@ -45,6 +46,7 @@ impl AccountType {
         }
     }
 
+    #[inline(always)]
     pub fn calculate_fee(&self, side: Side, price: Price, quantity: Quantity) -> u64 {
         let fee_bps = self.fee_bps();
         match side {
@@ -81,6 +83,8 @@ impl AccountStatus {
             Self::ReduceOnly => "reduce-only",
         }
     }
+
+    #[inline(always)]
     pub fn allows(&self, op: AccountOpp) -> bool {
         matches!(
             (self, op),
@@ -108,12 +112,18 @@ impl Holdings {
         available.insert(asset_id, quantity);
         Self { reserved, available }
     }
+
+    #[inline(always)]
     pub fn get_available_quantity(&self, asset_id: AssetId) -> Option<Quantity> {
         self.available.get(&asset_id).copied()
     }
+
+    #[inline(always)]
     pub fn get_reserved_quantity(&self, asset_id: AssetId) -> Option<Quantity> {
         self.reserved.get(&asset_id).copied()
     }
+
+    #[inline]
     pub fn reserve_asset(&mut self, asset_id: AssetId, quantity: Quantity) -> bool {
         if quantity == 0 {
             return false;
@@ -133,6 +143,8 @@ impl Holdings {
             None => false,
         }
     }
+
+    #[inline]
     pub fn can_reserve_asset(&self, asset_id: AssetId, quantity: Quantity) -> bool {
         if quantity == 0 {
             return false;
@@ -148,6 +160,7 @@ impl Holdings {
         }
     }
 
+    #[inline]
     pub fn release_asset(&mut self, asset_id: AssetId, quantity: Quantity) -> bool {
         let Some(reserved_asset_quantity) = self.reserved.get_mut(&asset_id) else {
             return false;
@@ -164,6 +177,8 @@ impl Holdings {
 
         true
     }
+
+    #[inline(always)]
     pub fn consume_reserved_asset(&mut self, asset_id: AssetId, quantity: Quantity) -> bool {
         let Some(reserved_asset_quantity) = self.reserved.get_mut(&asset_id) else {
             return false;
@@ -176,6 +191,8 @@ impl Holdings {
 
         true
     }
+
+    #[inline]
     pub fn can_release_asset(&self, asset_id: AssetId, quantity: Quantity) -> bool {
         let Some(reserved_asset_quantity) = self.reserved.get(&asset_id) else {
             return false;
@@ -194,6 +211,8 @@ impl Holdings {
         assets.dedup();
         assets
     }
+
+    #[inline(always)]
     pub fn credit_asset(&mut self, asset_id: AssetId, quantity: Quantity) -> bool {
         let current_asset_quantity = self.available.entry(asset_id).or_insert(0);
         *current_asset_quantity += quantity;
@@ -234,17 +253,22 @@ impl Account {
         }
     }
 
+    #[inline(always)]
     pub fn calculate_fee(&self, side: Side, price: Price, quantity: Quantity) -> u64 {
         self.account_type.calculate_fee(side, price, quantity)
     }
 
+    #[inline(always)]
     pub fn get_available_balance(&self) -> Option<Balance> {
         Some(self.available_balance)
     }
+
+    #[inline(always)]
     pub fn get_reserved_balance(&self) -> Option<Balance> {
         Some(self.reserved)
     }
 
+    #[inline]
     pub fn reserve(&mut self, amount: Balance) -> bool {
         if !self.status.allows(AccountOpp::Reserve) {
             return false;
@@ -260,6 +284,8 @@ impl Account {
             true
         }
     }
+
+    #[inline]
     pub fn can_reserve(&self, amount: Balance) -> bool {
         if !self.status.allows(AccountOpp::Reserve) {
             return false;
@@ -269,6 +295,8 @@ impl Account {
         }
         self.available_balance >= amount
     }
+
+    #[inline]
     pub fn release_reserve(&mut self, amount: Balance) -> bool {
         if !self.status.allows(AccountOpp::Release) {
             return false;
@@ -284,6 +312,8 @@ impl Account {
             true
         }
     }
+
+    #[inline]
     pub fn can_release_reserve(&self, amount: Balance) -> bool {
         if !self.status.allows(AccountOpp::Release) {
             return false;
@@ -293,6 +323,8 @@ impl Account {
         }
         self.reserved >= amount
     }
+
+    #[inline]
     pub fn withdraw(&mut self, amount: Balance) -> bool {
         if !self.status.allows(AccountOpp::Withdraw) {
             return false;
@@ -306,6 +338,8 @@ impl Account {
         self.available_balance -= amount;
         true
     }
+
+    #[inline(always)]
     pub fn consume_reserve(&mut self, amount: Balance) -> bool {
         if amount > self.reserved {
             return false;
@@ -313,6 +347,8 @@ impl Account {
         self.reserved -= amount;
         true
     }
+
+    #[inline(always)]
     pub fn credit_amount(&mut self, amount: Balance) -> bool {
         if !self.status.allows(AccountOpp::Credit) {
             return false;
@@ -327,6 +363,7 @@ impl Account {
         true
     }
 
+    #[inline]
     pub fn can_withdraw(&self, amount: Balance) -> bool {
         if !self.status.allows(AccountOpp::Withdraw) {
             return false;
@@ -339,6 +376,8 @@ impl Account {
         }
         true
     }
+
+    #[inline]
     pub fn deposit(&mut self, amount: Balance) -> bool {
         if !self.status.allows(AccountOpp::Deposit) {
             return false;
@@ -352,6 +391,8 @@ impl Account {
         self.available_balance = new_balance;
         true
     }
+
+    #[inline(always)]
     pub fn can_deposit(&self) -> bool {
         if !self.status.allows(AccountOpp::Deposit) {
             return false;
@@ -359,6 +400,7 @@ impl Account {
         true
     }
 
+    #[inline]
     pub fn can_settle(&self, price: Price, asset_id: AssetId, quantity: Quantity, side: Side) -> bool {
         if !self.status.allows(AccountOpp::Settle) {
             return false;
@@ -376,6 +418,7 @@ impl Account {
         }
     }
 
+    #[inline]
     pub fn settle(&mut self, price: Price, asset_id: AssetId, quantity: Quantity, side: Side) -> bool {
         if !self.status.allows(AccountOpp::Settle) {
             return false;
@@ -463,6 +506,7 @@ impl RiskEngine {
     }
 
     // if order failed / rejected by orderbook release assets/amount for next orders
+    #[inline]
     pub fn release(
         &mut self,
         user_id: InternalUserId,
@@ -509,6 +553,7 @@ impl RiskEngine {
         }
     }
     // if order matched by orderbook settle reserved assets/amount for next orders
+    #[inline]
     pub fn settle(
         &mut self,
         user_id: InternalUserId,
@@ -577,10 +622,12 @@ impl RiskEngine {
         int_id
     }
     // check order if valid , reserve the funds/asset and return.
+    #[inline]
     pub fn check_and_reserve(&mut self, user_id: ExternalUserId, order: Order) -> bool {
         self.check(user_id, order) && self.reserve(user_id, order)
     }
     // only check if order is valid or not
+    #[inline]
     pub fn check(&mut self, user_id: ExternalUserId, order: Order) -> bool {
         let asset_id = order.asset_id;
 
@@ -622,6 +669,7 @@ impl RiskEngine {
         }
     }
     // only reserve, assumes that provided order is valid
+    #[inline]
     pub fn reserve(&mut self, user_id: ExternalUserId, order: Order) -> bool {
         let asset_id = order.asset_id;
 
@@ -664,6 +712,7 @@ impl RiskEngine {
         }
     }
 
+    #[inline]
     pub fn get_internal_id(&mut self, external_id: ExternalUserId) -> InternalUserId {
         // if internal_id not found then insert id which will be self.accounts.len()
         *self.id_map.entry(external_id).or_insert(self.accounts.len())
