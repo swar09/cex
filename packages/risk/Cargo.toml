@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 domain = { path = "../domain" }
 fxhash = "0.2.1"
+arrayvec = "0.7"
