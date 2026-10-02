@@ -7,7 +7,7 @@ use domain::NewOrder;
 
 use crate::{
     AppState,
-    types::{NewOrderReq, ext_order_id_genrator},
+    types::{NewOrderReq, ext_order_id_generator},
 };
 pub async fn health_check() -> Response {
     Json("ok").into_response()
@@ -16,8 +16,8 @@ pub async fn health_check() -> Response {
 pub async fn create_new_order(new_order_req: NewOrderReq, State(_state): State<AppState>) -> Response {
     // validate jwt in the middleware
     // validate user account permissions
-    // use helper fuctions
-    let new_id = ext_order_id_genrator();
+    // use helper functions
+    let new_id = ext_order_id_generator();
     let _new_order = NewOrder {
         order_id: new_id,
         order_type: new_order_req.order_type,
@@ -38,7 +38,7 @@ pub async fn create_new_order(new_order_req: NewOrderReq, State(_state): State<A
     // cache.push(new_order , some_ttl)
 
     // order matched or rejected or stays in orderbook forever is not part of the
-    // rest api if order rejcted or expired another api will send resp to client
+    // rest api if order rejected or expired another api will send resp to client
 
     todo!()
 }
@@ -52,16 +52,16 @@ pub async fn get_order_by_id(State(_state): State<AppState>) -> Response {
 pub async fn cancel_order(State(_state): State<AppState>) -> Response {
     // send command to exchange
     // state.cmd.cancel_order()
-    // if send sucessfully return 200
+    // if send successfully return 200
     // as per my info orderbook will defnetly cancel that order
     // unless it was matched before cancel req arrived at exchange
-    // cache.order_cacnelled();
+    // cache.order_cancelled();
     todo!()
 }
 pub async fn modify_order(State(_state): State<AppState>) -> Response {
     // send command to exchange
     // state.cmd.modify_order()
-    // if send sucessfully return 200
+    // if send successfully return 200
     // as per my info orderbook will defnetly modify that order
     // unless it was matched before modify req arrived at exchange
     // cache.order_modified();

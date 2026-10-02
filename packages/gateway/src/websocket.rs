@@ -33,7 +33,7 @@ pub async fn ws_sender(mut sender: SplitSink<WebSocket, Message>, mut tx: Receiv
         match tx.recv().await {
             Ok(event) => {
                 // match with clients requested symbols then
-                // serealize and send message to client
+                // serialize and send message to client
                 let payload_bytes = serde_json::to_vec(&*event.clone()).unwrap(); // handle error later
                 let message = Message::Binary(payload_bytes.into());
                 if sender.send(message).await.is_err() {
@@ -49,9 +49,9 @@ pub async fn ws_sender(mut sender: SplitSink<WebSocket, Message>, mut tx: Receiv
 }
 pub async fn ws_receiver(_receiver: SplitStream<WebSocket>) {
     loop {
-        // recive the clients req in real time and repsond to it
+        // receive the clients req in real time and respond to it
         // may req to change the symbols or stop
     }
 }
-// health check and continous ping fucntion
+// health check and continuous ping function
 pub async fn ws_ping() {}

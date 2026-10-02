@@ -9,6 +9,6 @@ pub struct NewOrderReq {
     pub side: Side,
 }
 
-pub fn ext_order_id_genrator() -> OrderId {
+pub fn ext_order_id_generator() -> OrderId {
     1111
 }
