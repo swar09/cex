@@ -1076,7 +1076,8 @@ mod tests {
         // Add orderbook
         exchange.add_new_orderbook(Symbol::BtcInr);
 
-        // Access works through get_orderbook, get_orderbook_mut, Index, and direct array
+        // Access works through get_orderbook, get_orderbook_mut, Index, and
+        // direct array
         assert!(exchange.get_orderbook(Symbol::BtcInr).is_ok());
         assert!(exchange.get_orderbook_mut(Symbol::BtcInr).is_ok());
         assert!(exchange[Symbol::BtcInr].is_empty());
@@ -1084,4 +1085,3 @@ mod tests {
         assert!(exchange.orderbooks[Symbol::BtcInr.index()].as_ref().unwrap().is_empty());
     }
 }
-

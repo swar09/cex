@@ -4,7 +4,6 @@ use axum::{
     extract::FromRequestParts,
     http::{StatusCode, request::Parts},
 };
-
 use jsonwebtoken::{DecodingKey, Validation, decode, decode_header};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -100,4 +99,3 @@ impl FromRequestParts<Arc<AppState>> for AuthUser {
         Self::from_request_parts(parts, state.as_ref()).await
     }
 }
-

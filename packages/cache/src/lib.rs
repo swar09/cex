@@ -775,8 +775,8 @@ mod tests {
             OrderType::GoodForDay,
             OrderType::Market,
         ];
-        for ot in types {
-            let order = Order::new(1, 2, 3, Side::Buy, 100, 10, ot);
+        for order_type in types {
+            let order = Order::new(1, 2, 3, Side::Buy, 100, 10, order_type);
             let json = serde_json::to_string(&order).unwrap();
             let deserialized: Order = serde_json::from_str(&json).unwrap();
             assert_eq!(order, deserialized);

@@ -22,19 +22,9 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(
-        tx: Sender<Arc<OrderbookEventLog>>,
-        cache: Arc<Cache>,
-        cmd: exchange::ExchangeClient,
-        ws_capacity: usize,
-    ) -> Self {
+    pub fn new(tx: Sender<Arc<OrderbookEventLog>>, cache: Arc<Cache>, cmd: exchange::ExchangeClient, ws_capacity: usize) -> Self {
         let (ws_tx, _) = tokio::sync::broadcast::channel(ws_capacity);
         websocket::start_ws_broadcaster(tx.subscribe(), ws_tx.clone());
-        Self {
-            tx,
-            ws_tx,
-            cache,
-            cmd,
-        }
+        Self { tx, ws_tx, cache, cmd }
     }
 }

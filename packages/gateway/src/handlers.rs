@@ -19,10 +19,7 @@ pub async fn health_check() -> Response {
     Json("ok").into_response()
 }
 
-pub async fn create_new_order(
-    State(state): State<AppState>,
-    Json(new_order_req): Json<NewOrderReq>,
-) -> Response {
+pub async fn create_new_order(State(state): State<AppState>, Json(new_order_req): Json<NewOrderReq>) -> Response {
     let new_id = ext_order_id_generator();
     let new_order = NewOrder {
         order_id: new_id,
@@ -45,10 +42,7 @@ pub async fn create_new_order(
     (StatusCode::OK, Json(new_order)).into_response()
 }
 
-pub async fn get_order_by_id(
-    State(state): State<AppState>,
-    Query(query): Query<GetOrderQuery>,
-) -> Response {
+pub async fn get_order_by_id(State(state): State<AppState>, Query(query): Query<GetOrderQuery>) -> Response {
     match state.cache.get_order(query.order_id).await {
         Ok(Some(order)) => (StatusCode::OK, Json(order)).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
@@ -56,10 +50,7 @@ pub async fn get_order_by_id(
     }
 }
 
-pub async fn cancel_order(
-    State(state): State<AppState>,
-    Json(req): Json<CancelOrderReq>,
-) -> Response {
+pub async fn cancel_order(State(state): State<AppState>, Json(req): Json<CancelOrderReq>) -> Response {
     let result = state.cmd.cancel_order(req.symbol, req.order_id);
     if let Err(e) = result {
         return (StatusCode::SERVICE_UNAVAILABLE, Json(format!("Cancel failed: {e}"))).into_response();
@@ -69,10 +60,7 @@ pub async fn cancel_order(
     StatusCode::OK.into_response()
 }
 
-pub async fn modify_order(
-    State(state): State<AppState>,
-    Json(req): Json<ModifyOrderReq>,
-) -> Response {
+pub async fn modify_order(State(state): State<AppState>, Json(req): Json<ModifyOrderReq>) -> Response {
     let result = state.cmd.modify_order(req.symbol, req.modify);
     if let Err(e) = result {
         return (StatusCode::SERVICE_UNAVAILABLE, Json(format!("Modify failed: {e}"))).into_response();

@@ -16,18 +16,11 @@ use tokio::sync::broadcast::{Receiver, Sender};
 
 use crate::{AppState, middleware::AuthUser};
 
-pub async fn ws_handler(
-    ws: WebSocketUpgrade,
-    auth_user: AuthUser,
-    State(state): State<AppState>,
-) -> Response {
+pub async fn ws_handler(ws: WebSocketUpgrade, auth_user: AuthUser, State(state): State<AppState>) -> Response {
     ws.on_upgrade(move |socket| handle(socket, state, auth_user))
 }
 
-pub fn start_ws_broadcaster(
-    mut event_rx: Receiver<Arc<OrderbookEventLog>>,
-    ws_tx: Sender<Message>,
-) -> tokio::task::JoinHandle<()> {
+pub fn start_ws_broadcaster(mut event_rx: Receiver<Arc<OrderbookEventLog>>, ws_tx: Sender<Message>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             match event_rx.recv().await {
@@ -35,18 +28,18 @@ pub fn start_ws_broadcaster(
                     Ok(bytes) => {
                         let message = Message::Binary(bytes.into());
                         let _ = ws_tx.send(message);
-                    }
+                    },
                     Err(e) => {
                         eprintln!("Failed to serialize orderbook event: {e}");
-                    }
+                    },
                 },
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                     eprintln!("Orderbook event broadcaster lagged by {skipped} events");
                     continue;
-                }
+                },
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                     break;
-                }
+                },
             }
         }
     })
@@ -76,13 +69,13 @@ pub async fn ws_sender(mut sender: SplitSink<WebSocket, Message>, mut ws_rx: Rec
                 if sender.send(message).await.is_err() {
                     return;
                 }
-            }
+            },
             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                 continue;
-            }
+            },
             Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                 return;
-            }
+            },
         }
     }
 }
@@ -155,4 +148,3 @@ mod tests {
         broadcaster_handle.abort();
     }
 }
-
