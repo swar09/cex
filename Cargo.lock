@@ -1876,7 +1876,6 @@ dependencies = [
  "cache",
  "chrono",
  "crc32fast",
- "crossbeam",
  "disruptor",
  "domain",
  "engine",
