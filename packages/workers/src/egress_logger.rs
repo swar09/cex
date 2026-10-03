@@ -17,20 +17,15 @@ pub fn orderbook_events_logger(mut consumer: EventConsumer, producer: OrderbookE
                         for event in orderbook_events {
                             let symbol_str = event.symbol().map(|s| s.as_str());
 
-                            let payload_bytes = match event.to_log_data() {
-                                Some(log_data) => match serde_json::to_vec(&log_data) {
-                                    Ok(b) => b,
-                                    Err(e) => {
-                                        eprintln!("[orderbook-egress-publisher] serialize log_data error: {e}");
-                                        continue;
-                                    },
-                                },
-                                None => match serde_json::to_vec(&event) {
-                                    Ok(b) => b,
-                                    Err(e) => {
-                                        eprintln!("[orderbook-egress-publisher] serialize raw event error: {e}");
-                                        continue;
-                                    },
+                            let Some(log_data) = event.to_log_data() else {
+                                continue;
+                            };
+
+                            let payload_bytes = match serde_json::to_vec(&log_data) {
+                                Ok(b) => b,
+                                Err(e) => {
+                                    eprintln!("[orderbook-egress-publisher] serialize log_data error: {e}");
+                                    continue;
                                 },
                             };
 

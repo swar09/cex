@@ -887,7 +887,8 @@ mod tests {
         // consume all resting liquidity via a match
         book.add_order(gtc_buy(2, 100, 10));
 
-        // nothing left resting at 100, so a fresh buy shouldn't be fully fillable
+        // nothing left resting at 100, so a fresh buy shouldn't be fully
+        // fillable
         assert!(!book.can_fully_fill(Side::Buy, 100, 1));
     }
 
@@ -934,7 +935,8 @@ mod tests {
 
         // buying 10 with a limit of 101 should walk through both levels
         assert!(book.can_fully_fill(Side::Buy, 101, 10));
-        // but asking for more than total available across eligible levels should fail
+        // but asking for more than total available across eligible levels
+        // should fail
         assert!(!book.can_fully_fill(Side::Buy, 101, 11));
     }
 
@@ -1010,8 +1012,8 @@ mod tests {
         let mut book = OrderBook::new();
         book.add_order(gtc_sell(1, 100, 5));
 
-        // Market buy of 10 against resting ask of only 5 -> Fill Or Kill kills the
-        // order
+        // Market buy of 10 against resting ask of only 5 -> Fill Or Kill kills
+        // the order
         let market_buy = Order::new_market_order(2, 2, 1, Side::Buy, 10, OrderType::Market);
         assert!(book.add_order(market_buy).is_none());
 
@@ -1046,8 +1048,8 @@ mod tests {
         let mut book = OrderBook::new();
         book.add_order(gtc_buy(1, 100, 5));
 
-        // Market sell of 10 against resting bid of only 5 -> Fill Or Kill kills the
-        // order
+        // Market sell of 10 against resting bid of only 5 -> Fill Or Kill kills
+        // the order
         let market_sell = Order::new_market_order(2, 2, 1, Side::Sell, 10, OrderType::Market);
         assert!(book.add_order(market_sell).is_none());
 

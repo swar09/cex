@@ -452,7 +452,8 @@ impl RiskEngine {
         int_id
     }
 
-    // if order failed / rejected by orderbook release assets/amount for next orders
+    // if order failed / rejected by orderbook release assets/amount for next
+    // orders
     #[inline]
     pub fn release(
         &mut self,
@@ -486,7 +487,8 @@ impl RiskEngine {
             },
         }
     }
-    // if order matched by orderbook settle reserved assets/amount for next orders
+    // if order matched by orderbook settle reserved assets/amount for next
+    // orders
     #[inline]
     pub fn settle(
         &mut self,
@@ -564,8 +566,8 @@ impl RiskEngine {
             let account = &self.accounts[id];
             // handle market order here cause this order has no price
             // price = none
-            // let price = orderbook.get_last_match(); // write some methods later while
-            // working on ordebrook
+            // let price = orderbook.get_last_match(); // write some methods
+            // later while working on ordebrook
             return match order.side {
                 Side::Buy => {
                     if let Some(price) = order.price {
@@ -650,7 +652,8 @@ impl RiskEngine {
 
     #[inline]
     pub fn get_internal_id(&mut self, external_id: ExternalUserId) -> InternalUserId {
-        // if internal_id not found then insert id which will be self.accounts.len()
+        // if internal_id not found then insert id which will be
+        // self.accounts.len()
         *self.id_map.entry(external_id).or_insert(self.accounts.len())
     }
 }
@@ -692,7 +695,8 @@ mod tests {
 
     #[test]
     fn test_holdings_get_available_and_reserved_quantity() {
-        // checking that we can read available and reserved asset amounts correctly
+        // checking that we can read available and reserved asset amounts
+        // correctly
         let mut holdings = Holdings::default();
         let asset_btc = 1;
         let asset_eth = 2;
@@ -726,7 +730,8 @@ mod tests {
 
     #[test]
     fn test_holdings_reserve_asset() {
-        // reserving locks coins for an order and moves them from available to reserved
+        // reserving locks coins for an order and moves them from available to
+        // reserved
         let mut holdings = Holdings::default();
         let asset_id = 1;
 
@@ -761,7 +766,8 @@ mod tests {
 
     #[test]
     fn test_holdings_release_asset() {
-        // releasing moves locked coins back to available when an order is cancelled
+        // releasing moves locked coins back to available when an order is
+        // cancelled
         let mut holdings = Holdings::default();
         let asset_id = 1;
 
@@ -784,7 +790,8 @@ mod tests {
 
     #[test]
     fn test_holdings_consume_reserved_asset() {
-        // consuming removes locked coins completely when an order is filled and sold
+        // consuming removes locked coins completely when an order is filled and
+        // sold
         let mut holdings = Holdings::default();
         let asset_id = 1;
 
@@ -932,8 +939,8 @@ mod tests {
 
     #[test]
     fn test_account_can_withdraw() {
-        // users can withdraw if active or closed, but not if frozen or in reduce only
-        // risk state
+        // users can withdraw if active or closed, but not if frozen or in
+        // reduce only risk state
         let mut account = setup_account(400, 100);
 
         assert!(!account.can_withdraw(0));
@@ -1113,8 +1120,8 @@ mod tests {
 
     #[test]
     fn test_account_settle_buy() {
-        // buyer pays locked cash and receives the purchased coins into available
-        // balance
+        // buyer pays locked cash and receives the purchased coins into
+        // available balance
         let mut account = setup_account(500, 300);
 
         let price: Price = 10;
@@ -1151,8 +1158,8 @@ mod tests {
 
     #[test]
     fn test_account_settle_sell() {
-        // seller delivers locked coins and receives cash proceeds into available
-        // balance
+        // seller delivers locked coins and receives cash proceeds into
+        // available balance
         let mut account = setup_account(500, 300);
 
         let asset_id: AssetId = 5;
@@ -1188,26 +1195,26 @@ mod tests {
     }
     #[test]
     fn test_overflow_holdings_methods() {
-        // checking that giving huge quantity numbers to coin holding methods does not
-        // panic
+        // checking that giving huge quantity numbers to coin holding methods
+        // does not panic
         let mut holdings = Holdings::default();
         let asset_id = 1;
 
-        // trying to check or reserve the highest possible 32 bit number when we have
-        // only 50 coins
+        // trying to check or reserve the highest possible 32 bit number when we
+        // have only 50 coins
         holdings.available[asset_id as usize] = 50;
         assert!(!holdings.can_reserve_asset(asset_id, u32::MAX));
         assert!(!holdings.reserve_asset(asset_id, u32::MAX));
 
-        // trying to unlock or consume the highest possible 32 bit number when we have
-        // only 20 locked coins
+        // trying to unlock or consume the highest possible 32 bit number when
+        // we have only 20 locked coins
         holdings.reserved[asset_id as usize] = 20;
         assert!(!holdings.can_release_asset(asset_id, u32::MAX));
         assert!(!holdings.release_asset(asset_id, u32::MAX));
         assert!(!holdings.consume_reserved_asset(asset_id, u32::MAX));
 
-        // crediting maximum allowed quantity into an empty asset slto should work
-        // without overflow
+        // crediting maximum allowed quantity into an empty asset slto should
+        // work without overflow
         let new_asset = 2;
         assert!(holdings.credit_asset(new_asset, u32::MAX));
         assert_eq!(holdings.get_available_quantity(new_asset), Some(u32::MAX));
@@ -1215,54 +1222,55 @@ mod tests {
 
     #[test]
     fn test_overflow_account_balance_methods() {
-        // checking that giving huge money amounts to cash methods does not panic
+        // checking that giving huge money amounts to cash methods does not
+        // panic
         let mut account = setup_account(500, 300);
 
-        // locking more money than exists in the universe should safely return false
-        // without panicking
+        // locking more money than exists in the universe should safely return
+        // false without panicking
         assert!(!account.can_reserve(u64::MAX));
         assert!(!account.reserve(u64::MAX));
 
-        // unlocking more money than exists in reserve should safely return false
-        // without panicking
+        // unlocking more money than exists in reserve should safely return
+        // false without panicking
         assert!(!account.can_release_reserve(u64::MAX));
         assert!(!account.release_reserve(u64::MAX));
 
-        // withdrawing more money than available should safely return false without
-        // panicking
+        // withdrawing more money than available should safely return false
+        // without panicking
         assert!(!account.can_withdraw(u64::MAX));
         assert!(!account.withdraw(u64::MAX));
         assert!(!account.consume_reserve(u64::MAX));
 
-        // depositing or crediting money that would push the ttoal balance past the 64
-        // bit maximum safely returns false
+        // depositing or crediting money that would push the ttoal balance past
+        // the 64 bit maximum safely returns false
         assert!(!account.deposit(u64::MAX));
         assert!(!account.credit_amount(u64::MAX));
 
-        // balances should remain completely intact and unmodified after rejected
-        // overflow attempts
+        // balances should remain completely intact and unmodified after
+        // rejected overflow attempts
         assert_eq!(account.available_balance, 500);
         assert_eq!(account.reserved, 300);
     }
 
     #[test]
     fn test_overflow_settle_and_can_settle_calculations() {
-        // checking that extreme prices and quantities during trade settlement do not
-        // crash the engine
+        // checking that extreme prices and quantities during trade settlement
+        // do not crash the engine
         let mut account = setup_account(500, 300);
 
         let asset_id = 1;
         account.holdings.reserved[asset_id as usize] = 25;
 
-        // buy trade multiplication overflow where price times quantity exceeds 64 bit
-        // maximum
+        // buy trade multiplication overflow where price times quantity exceeds
+        // 64 bit maximum
         assert!(!account.can_settle(u64::MAX, asset_id, 2, Side::Buy));
         assert!(!account.can_settle(u64::MAX, asset_id, u32::MAX, Side::Buy));
         assert!(!account.settle(u64::MAX, asset_id, 2, Side::Buy));
         assert!(!account.settle(u64::MAX, asset_id, u32::MAX, Side::Buy));
 
-        // sell trade multiplication overflow where price times quantity exceeds 64 bit
-        // maximum
+        // sell trade multiplication overflow where price times quantity exceeds
+        // 64 bit maximum
         assert!(!account.can_settle(u64::MAX, asset_id, 2, Side::Sell));
         assert!(!account.can_settle(u64::MAX, asset_id, u32::MAX, Side::Sell));
         assert!(!account.settle(u64::MAX, asset_id, 2, Side::Sell));

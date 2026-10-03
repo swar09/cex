@@ -61,8 +61,8 @@ impl FromRequestParts<Arc<AppState>> for AuthUser {
             return Err(StatusCode::UNAUTHORIZED);
         };
 
-        // let jwk = get_or_fetch() : first get jwk from cache if not then fetch JWKS in
-        // cache from well_known json
+        // let jwk = get_or_fetch() : first get jwk from cache if not then fetch
+        // JWKS in cache from well_known json
         // let decoding key from jwk
         // then decode using decoding key
         // if yes then verify the nbf , exp,

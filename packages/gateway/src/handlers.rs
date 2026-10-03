@@ -37,14 +37,15 @@ pub async fn create_new_order(new_order_req: NewOrderReq, State(_state): State<A
     // order inserted in orderbook return 200 ok
     // cache.push(new_order , some_ttl)
 
-    // order matched or rejected or stays in orderbook forever is not part of the
-    // rest api if order rejected or expired another api will send resp to client
+    // order matched or rejected or stays in orderbook forever is not part of
+    // the rest api if order rejected or expired another api will send resp
+    // to client
 
     todo!()
 }
 pub async fn get_order_by_id(State(_state): State<AppState>) -> Response {
-    // get order from cache first if not found return 404 or forward to node backend
-    // this is not for historical data
+    // get order from cache first if not found return 404 or forward to node
+    // backend this is not for historical data
     // this api is only for order live in orderbook
     // historical orders are in node backend
     todo!()

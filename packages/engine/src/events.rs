@@ -6,9 +6,41 @@ use domain::{
 use serde::{Deserialize, Serialize};
 
 use crate::exchange::Sequence;
-#[derive(Debug, Clone, Serialize)]
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum OrderbookEventType {
+    OrderPlaced,
+    TradeExecuted,
+    OrderCancelled,
+    OrderModified,
+    OrderRejected,
+    ModifyOrderRejected,
+    OrdersExpired,
+    MarketOpened,
+    MarketClosed,
+    Error,
+}
+
+impl OrderbookEventType {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::OrderPlaced => "OrderPlaced",
+            Self::TradeExecuted => "TradeExecuted",
+            Self::OrderCancelled => "OrderCancelled",
+            Self::OrderModified => "OrderModified",
+            Self::OrderRejected => "OrderRejected",
+            Self::ModifyOrderRejected => "ModifyOrderRejected",
+            Self::OrdersExpired => "OrdersExpired",
+            Self::MarketOpened => "MarketOpened",
+            Self::MarketClosed => "MarketClosed",
+            Self::Error => "ERROR",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OrderbookEventLog {
-    pub event_type: Option<String>,
+    pub event_type: Option<OrderbookEventType>,
     pub sequence_no: Option<u64>,
     pub symbol: Option<Symbol>,
     pub order_id: Option<OrderId>,
@@ -73,111 +105,88 @@ impl OrderBookEvent {
 
     pub fn to_log_data(&self) -> Option<OrderbookEventLog> {
         match self {
-            Self::OrderPlaced(seq, symbol, ev) => {
-                let event_type = self.as_str().to_string();
+            Self::OrderPlaced(seq, symbol, ev) => Some(OrderbookEventLog {
+                event_type: Some(OrderbookEventType::OrderPlaced),
+                sequence_no: Some(*seq),
+                symbol: Some(*symbol),
+                order_id: Some(ev.order_id),
+                price: Some(ev.price),
+                quantity: Some(ev.quantity),
+                order_type: Some(ev.order_type),
+                order_side: Some(ev.side),
+                order_ids: None,
+                error_code: None,
+            }),
 
-                Some(OrderbookEventLog {
-                    event_type: Some(event_type),
-                    sequence_no: Some(*seq),
-                    symbol: Some(*symbol),
-                    order_id: Some(ev.order_id),
-                    price: Some(ev.price),
-                    quantity: Some(ev.quantity),
-                    order_type: Some(ev.order_type),
-                    order_side: Some(ev.side),
-                    order_ids: None,
-                    error_code: None,
-                })
-            },
+            Self::TradeExecuted(seq, symbol, ev) => Some(OrderbookEventLog {
+                event_type: Some(OrderbookEventType::TradeExecuted),
+                sequence_no: Some(*seq),
+                symbol: Some(*symbol),
+                order_id: Some(ev.maker_order_id),
+                price: Some(ev.price),
+                quantity: Some(ev.quantity),
+                order_side: Some(ev.taker_side),
+                order_type: None,
+                order_ids: None,
+                error_code: None,
+            }),
 
-            Self::TradeExecuted(seq, symbol, ev) => {
-                let event_type = self.as_str().to_string();
+            Self::OrderCancelled(seq, symbol, ev) => Some(OrderbookEventLog {
+                event_type: Some(OrderbookEventType::OrderCancelled),
+                sequence_no: Some(*seq),
+                symbol: Some(*symbol),
+                order_id: Some(ev.order_id),
+                order_type: None,
+                price: Some(ev.price),
+                order_side: Some(ev.side),
+                quantity: Some(ev.cancelled_qty),
+                order_ids: None,
+                error_code: None,
+            }),
 
-                Some(OrderbookEventLog {
-                    event_type: Some(event_type),
-                    sequence_no: Some(*seq),
-                    symbol: Some(*symbol),
-                    order_id: Some(ev.maker_order_id),
-                    price: Some(ev.price),
-                    quantity: Some(ev.quantity),
-                    order_side: Some(ev.taker_side),
-                    order_type: None,
-                    order_ids: None,
-                    error_code: None,
-                })
-            },
+            Self::OrderModified(seq, symbol, ev) => Some(OrderbookEventLog {
+                event_type: Some(OrderbookEventType::OrderModified),
+                sequence_no: Some(*seq),
+                symbol: Some(*symbol),
+                order_id: Some(ev.order_id),
+                price: Some(ev.new_price),
+                quantity: Some(ev.new_qty),
+                order_type: None,
+                order_side: Some(ev.side),
+                order_ids: None,
+                error_code: None,
+            }),
 
-            Self::OrderCancelled(seq, symbol, ev) => {
-                let event_type = self.as_str().to_string();
-                Some(OrderbookEventLog {
-                    event_type: Some(event_type),
-                    sequence_no: Some(*seq),
-                    symbol: Some(*symbol),
-                    order_id: Some(ev.order_id),
-                    order_type: None,
-                    price: Some(ev.price),
-                    order_side: Some(ev.side),
-                    quantity: Some(ev.cancelled_qty),
-                    order_ids: None,
-                    error_code: None,
-                })
-            },
+            Self::OrderRejected(seq, symbol, ev) => Some(OrderbookEventLog {
+                event_type: Some(OrderbookEventType::OrderRejected),
+                sequence_no: Some(*seq),
+                symbol: Some(*symbol),
+                order_id: Some(ev.order_id),
+                order_type: None,
+                price: None,
+                order_side: None,
+                quantity: None,
+                order_ids: None,
+                error_code: None,
+            }),
 
-            Self::OrderModified(seq, symbol, ev) => {
-                let event_type = self.as_str().to_string();
-
-                Some(OrderbookEventLog {
-                    event_type: Some(event_type),
-                    sequence_no: Some(*seq),
-                    symbol: Some(*symbol),
-                    order_id: Some(ev.order_id),
-                    price: Some(ev.new_price),
-                    quantity: Some(ev.new_qty),
-                    order_type: None,
-                    order_side: Some(ev.side),
-                    order_ids: None,
-                    error_code: None,
-                })
-            },
-
-            Self::OrderRejected(seq, symbol, ev) => {
-                let event_type = self.as_str().to_string();
-                Some(OrderbookEventLog {
-                    event_type: Some(event_type),
-                    sequence_no: Some(*seq),
-                    symbol: Some(*symbol),
-                    order_id: Some(ev.order_id),
-                    order_type: None,
-                    price: None,
-                    order_side: None,
-                    quantity: None,
-                    order_ids: None,
-                    error_code: None,
-                })
-            },
-
-            Self::ModifyOrderRejected(seq, symbol, ev) => {
-                let event_type = self.as_str().to_string();
-
-                Some(OrderbookEventLog {
-                    event_type: Some(event_type),
-                    sequence_no: Some(*seq),
-                    symbol: Some(*symbol),
-                    order_id: Some(ev.order_id),
-                    price: Some(ev.new_price),
-                    quantity: Some(ev.new_qty),
-                    order_type: None,
-                    order_side: Some(ev.side),
-                    order_ids: None,
-                    error_code: None,
-                })
-            },
+            Self::ModifyOrderRejected(seq, symbol, ev) => Some(OrderbookEventLog {
+                event_type: Some(OrderbookEventType::ModifyOrderRejected),
+                sequence_no: Some(*seq),
+                symbol: Some(*symbol),
+                order_id: Some(ev.order_id),
+                price: Some(ev.new_price),
+                quantity: Some(ev.new_qty),
+                order_type: None,
+                order_side: Some(ev.side),
+                order_ids: None,
+                error_code: None,
+            }),
 
             Self::OrdersExpired(seq, symbol, expred_orders) => {
-                let event_type = self.as_str().to_string();
                 let order_ids: Vec<u64> = expred_orders.iter().map(|(id, ..)| *id).collect();
                 Some(OrderbookEventLog {
-                    event_type: Some(event_type),
+                    event_type: Some(OrderbookEventType::OrdersExpired),
                     sequence_no: Some(*seq),
                     symbol: Some(*symbol),
                     order_id: None,
@@ -190,18 +199,44 @@ impl OrderBookEvent {
                 })
             },
 
-            Self::MarketOpened(_seq, _symbol) => {
-                // TODO
-                None
-            },
-            Self::MarketClosed(_seq, _symbol) => {
-                // TODO
-                None
-            },
-            Self::Error(_seq, _error_code) => {
-                // TODO
-                None
-            },
+            Self::MarketOpened(seq, symbol) => Some(OrderbookEventLog {
+                event_type: Some(OrderbookEventType::MarketOpened),
+                sequence_no: Some(*seq),
+                symbol: Some(*symbol),
+                order_id: None,
+                price: None,
+                quantity: None,
+                order_type: None,
+                order_side: None,
+                order_ids: None,
+                error_code: None,
+            }),
+
+            Self::MarketClosed(seq, symbol) => Some(OrderbookEventLog {
+                event_type: Some(OrderbookEventType::MarketClosed),
+                sequence_no: Some(*seq),
+                symbol: Some(*symbol),
+                order_id: None,
+                price: None,
+                quantity: None,
+                order_type: None,
+                order_side: None,
+                order_ids: None,
+                error_code: None,
+            }),
+
+            Self::Error(seq, error_code) => Some(OrderbookEventLog {
+                event_type: Some(OrderbookEventType::Error),
+                sequence_no: Some(*seq),
+                symbol: None,
+                order_id: None,
+                price: None,
+                quantity: None,
+                order_type: None,
+                order_side: None,
+                order_ids: None,
+                error_code: Some(*error_code as u64),
+            }),
         }
     }
 
@@ -209,19 +244,23 @@ impl OrderBookEvent {
         matches!(self, Self::Error(..))
     }
 
-    pub fn as_str(&self) -> &'static str {
+    pub fn event_type(&self) -> OrderbookEventType {
         match self {
-            Self::MarketClosed(..) => "MarketClosed",
-            Self::MarketOpened(..) => "MarketOpened",
-            Self::OrderPlaced(..) => "OrderPlaced",
-            Self::TradeExecuted(..) => "TradeExecuted",
-            Self::OrderCancelled(..) => "OrderCancelled",
-            Self::OrderModified(..) => "OrderModified",
-            Self::OrderRejected(..) => "OrderRejected",
-            Self::OrdersExpired(..) => "OrdersExpired",
-            Self::ModifyOrderRejected(..) => "ModifyOrderRejected",
-            Self::Error(..) => "ERROR",
+            Self::MarketClosed(..) => OrderbookEventType::MarketClosed,
+            Self::MarketOpened(..) => OrderbookEventType::MarketOpened,
+            Self::OrderPlaced(..) => OrderbookEventType::OrderPlaced,
+            Self::TradeExecuted(..) => OrderbookEventType::TradeExecuted,
+            Self::OrderCancelled(..) => OrderbookEventType::OrderCancelled,
+            Self::OrderModified(..) => OrderbookEventType::OrderModified,
+            Self::OrderRejected(..) => OrderbookEventType::OrderRejected,
+            Self::OrdersExpired(..) => OrderbookEventType::OrdersExpired,
+            Self::ModifyOrderRejected(..) => OrderbookEventType::ModifyOrderRejected,
+            Self::Error(..) => OrderbookEventType::Error,
         }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        self.event_type().as_str()
     }
 }
 
@@ -563,7 +602,7 @@ mod tests {
             },
         );
         let log = placed.to_log_data().unwrap();
-        assert_eq!(log.event_type.as_deref(), Some("OrderPlaced"));
+        assert_eq!(log.event_type, Some(OrderbookEventType::OrderPlaced));
         assert_eq!(log.sequence_no, Some(1));
         assert_eq!(log.symbol, Some(Symbol::BtcInr));
         assert_eq!(log.order_id, Some(10));
@@ -590,7 +629,7 @@ mod tests {
             },
         );
         let log = trade.to_log_data().unwrap();
-        assert_eq!(log.event_type.as_deref(), Some("TradeExecuted"));
+        assert_eq!(log.event_type, Some(OrderbookEventType::TradeExecuted));
         assert_eq!(log.sequence_no, Some(2));
         assert_eq!(log.symbol, Some(Symbol::BtcInr));
         assert_eq!(log.order_id, Some(10));
@@ -611,7 +650,7 @@ mod tests {
             },
         );
         let log = cancelled.to_log_data().unwrap();
-        assert_eq!(log.event_type.as_deref(), Some("OrderCancelled"));
+        assert_eq!(log.event_type, Some(OrderbookEventType::OrderCancelled));
         assert_eq!(log.order_id, Some(15));
         assert_eq!(log.price, Some(3_000));
         assert_eq!(log.quantity, Some(5));
@@ -631,7 +670,7 @@ mod tests {
             },
         );
         let log = modified.to_log_data().unwrap();
-        assert_eq!(log.event_type.as_deref(), Some("OrderModified"));
+        assert_eq!(log.event_type, Some(OrderbookEventType::OrderModified));
         assert_eq!(log.order_id, Some(20));
         assert_eq!(log.price, Some(51_000));
         assert_eq!(log.quantity, Some(3));
@@ -647,7 +686,7 @@ mod tests {
             },
         );
         let log = rejected.to_log_data().unwrap();
-        assert_eq!(log.event_type.as_deref(), Some("OrderRejected"));
+        assert_eq!(log.event_type, Some(OrderbookEventType::OrderRejected));
         assert_eq!(log.order_id, Some(25));
 
         let mod_rejected = OrderBookEvent::ModifyOrderRejected(
@@ -665,7 +704,7 @@ mod tests {
             },
         );
         let log = mod_rejected.to_log_data().unwrap();
-        assert_eq!(log.event_type.as_deref(), Some("ModifyOrderRejected"));
+        assert_eq!(log.event_type, Some(OrderbookEventType::ModifyOrderRejected));
         assert_eq!(log.order_id, Some(30));
         assert_eq!(log.price, Some(310));
         assert_eq!(log.quantity, Some(2));
@@ -673,16 +712,25 @@ mod tests {
 
         let expired = OrderBookEvent::OrdersExpired(7, Symbol::BtcUsdc, vec![(100, 1, 10, Side::Buy, 1), (101, 2, 20, Side::Buy, 2)]);
         let log = expired.to_log_data().unwrap();
-        assert_eq!(log.event_type.as_deref(), Some("OrdersExpired"));
+        assert_eq!(log.event_type, Some(OrderbookEventType::OrdersExpired));
         assert_eq!(log.order_ids, Some(vec![100, 101]));
 
         let opened = OrderBookEvent::MarketOpened(8, Symbol::UsdtInr);
-        assert!(opened.to_log_data().is_none());
+        let log = opened.to_log_data().unwrap();
+        assert_eq!(log.event_type, Some(OrderbookEventType::MarketOpened));
+        assert_eq!(log.sequence_no, Some(8));
+        assert_eq!(log.symbol, Some(Symbol::UsdtInr));
 
         let closed = OrderBookEvent::MarketClosed(9, Symbol::InrUsdt);
-        assert!(closed.to_log_data().is_none());
+        let log = closed.to_log_data().unwrap();
+        assert_eq!(log.event_type, Some(OrderbookEventType::MarketClosed));
+        assert_eq!(log.sequence_no, Some(9));
+        assert_eq!(log.symbol, Some(Symbol::InrUsdt));
 
         let error = OrderBookEvent::Error(10, 404);
-        assert!(error.to_log_data().is_none());
+        let log = error.to_log_data().unwrap();
+        assert_eq!(log.event_type, Some(OrderbookEventType::Error));
+        assert_eq!(log.sequence_no, Some(10));
+        assert_eq!(log.error_code, Some(404));
     }
 }

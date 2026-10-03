@@ -36,15 +36,17 @@ pub fn spawn_gfd_prune_worker(mut cmd_tx: CommandDispatcher, symbol: Symbol, utc
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::path::PathBuf;
+    use std::{fs, path::PathBuf};
+
     use disruptor::{BusySpin, build_single_producer};
     use domain::{NewOrder, Side};
-    use engine::events::{EventEnvelope, OrderBookEvent};
-    use engine::exchange::Exchange;
-    use crate::wal_logger::{WalConfig, build_gated_ingress_pipeline};
+    use engine::{
+        events::{EventEnvelope, OrderBookEvent},
+        exchange::Exchange,
+    };
 
     use super::*;
+    use crate::wal_logger::{WalConfig, build_gated_ingress_pipeline};
 
     struct TempDirGuard {
         path: PathBuf,

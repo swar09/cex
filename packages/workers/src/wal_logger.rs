@@ -7,9 +7,11 @@ use std::{
 };
 
 use disruptor::{BusySpin, ProcessorSettings, build_multi_producer};
-use engine::commands::{CommandDispatcher, CommandEnvelope, ExchangeCommand};
-use engine::events::{EventConsumer, OrderBookEvent};
-use engine::exchange::Exchange;
+use engine::{
+    commands::{CommandDispatcher, CommandEnvelope, ExchangeCommand},
+    events::{EventConsumer, OrderBookEvent},
+    exchange::Exchange,
+};
 use memmap2::MmapMut;
 use thiserror::Error;
 
@@ -153,9 +155,10 @@ impl WalWriter {
                 if name.starts_with("wal_") && name.ends_with(".wal") {
                     let num_part = &name[4..name.len() - 4];
                     if let Ok(id) = num_part.parse::<u64>()
-                        && id > highest_segment_id {
-                            highest_segment_id = id;
-                        }
+                        && id > highest_segment_id
+                    {
+                        highest_segment_id = id;
+                    }
                 }
             }
         }
@@ -350,7 +353,8 @@ pub fn wal_logger(consumer: EventConsumer, config: WalConfig) -> thread::JoinHan
                         }
                     },
                     Err(disruptor::Polling::NoEvents) => {
-                        // Engine is idle: force-flush any pending unflushed bytes immediately
+                        // Engine is idle: force-flush any pending unflushed
+                        // bytes immediately
                         if let Err(e) = writer.flush_periodic(true) {
                             eprintln!("[wal-logger] Idle flush error: {e}");
                         }
@@ -405,10 +409,11 @@ pub fn build_gated_ingress_pipeline(buffer_size: usize, wal_config: WalConfig, e
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use disruptor::{BusySpin, build_single_producer};
     use domain::{NewOrder, OrderPlacedEvent, OrderType, Side, Symbol};
     use engine::events::{EventDispatcher, EventEnvelope};
-    use std::fs;
 
     use super::*;
 
