@@ -1,7 +1,8 @@
 use disruptor::{EventPoller, MultiProducer, MultiProducerBarrier, Producer, SingleConsumerBarrier};
 use domain::{ModifyOrder, NewOrder, OrderId, OrderType, Symbol};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ExchangeCommand {
     AddNewOrder(Symbol, NewOrder),
     CancelOrder(Symbol, OrderId),
@@ -53,6 +54,7 @@ impl CommandEnvelope {
     }
 }
 
+#[derive(Clone)]
 pub struct CommandDispatcher {
     pub producer: MultiProducer<CommandEnvelope, SingleConsumerBarrier>,
 }

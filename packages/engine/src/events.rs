@@ -3,7 +3,7 @@ use domain::{
     ExpredOrders, ModifyOrderRejectedEvent, OrderCancelledEvent, OrderId, OrderModifiedEvent, OrderPlacedEvent, OrderRejectedEvent, OrderType, Price,
     Quantity, Side, Symbol, TradeExecutedEvent,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::exchange::Sequence;
 #[derive(Debug, Clone, Serialize)]
@@ -21,7 +21,7 @@ pub struct OrderbookEventLog {
 }
 
 // orderbook events single producer multiple consumers
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub enum OrderBookEvent {
     // order placed
     OrderPlaced(Sequence, Symbol, OrderPlacedEvent),

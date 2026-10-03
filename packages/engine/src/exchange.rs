@@ -886,9 +886,9 @@ mod tests {
                     order_id: 2,
                     user_id: 1,
                     side: Side::Buy,
-                    price: 100,
+                    price: 102,
                     quantity: 1,
-                    order_type: OrderType::GoodTillCancel,
+                    order_type: OrderType::Market,
                 },
             )
         );
@@ -915,16 +915,13 @@ mod tests {
         let events = drain(&mut poller);
         assert_eq!(
             events,
-            vec![OrderBookEvent::OrderPlaced(
+            vec![OrderBookEvent::OrderRejected(
                 4,
                 SYMBOL,
-                OrderPlacedEvent {
+                OrderRejectedEvent {
                     order_id: 3,
                     user_id: 1,
-                    side: Side::Buy,
-                    price: 150,
-                    quantity: 1,
-                    order_type: OrderType::GoodTillCancel,
+                    reason: RejectReason::PostOnlyWouldCross,
                 },
             )]
         );
