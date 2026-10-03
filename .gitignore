@@ -29,3 +29,6 @@ Thumbs.db
 .idea/
 *.swp
 *~
+data/
+data/wal/
+*.wal

@@ -75,6 +75,7 @@ impl FromRequestParts<AppState> for AuthUser {
 
         let mut validation = Validation::new(jwt_header.alg);
         validation.validate_nbf = true;
+        validation.validate_aud = false;
 
         let token_data = decode::<Claims>(&token, &decoding_key, &validation).map_err(|_| StatusCode::UNAUTHORIZED)?;
 

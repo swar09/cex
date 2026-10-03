@@ -13,8 +13,6 @@ pub async fn v1_auth_routes() -> Router<AppState> {
     Router::<AppState>::new().route("/login", post(login)).route("/logout", post(logout))
 }
 pub async fn v1_order_routes() -> Router<AppState> {
-    
-
     Router::new()
         .route("/order", get(get_order_by_id).post(create_new_order))
         .route("/order/cancel", post(cancel_order))
