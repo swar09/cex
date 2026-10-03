@@ -13,4 +13,7 @@ pub enum CacheError {
 
     #[error("Fetch error: {0}")]
     FetchError(String),
+
+    #[error("Parse integer error: {0}")]
+    ParseInt(#[from] std::num::ParseIntError),
 }
