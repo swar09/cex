@@ -4,7 +4,6 @@ use domain::{
     AssetId, CancelReason, ModifyOrderRejectedEvent, Order, OrderCancelledEvent, OrderId, OrderIds, OrderModifiedEvent, OrderPlacedEvent,
     OrderRejectedEvent, OrderType, RejectReason, Side, Symbol, TradeExecutedEvent, Trades,
 };
-use fxhash::FxHashMap; // hardware optimized hasher function
 use risk::risk_engine::{ExternalUserId, RiskEngine};
 use thiserror::Error;
 
@@ -13,6 +12,9 @@ use crate::{
     events::{EventDispatcher, EventEnvelope, OrderBookEvent},
     orderbook::OrderBook,
 };
+
+pub const MAX_SYMBOLS: usize = 16;
+
 #[derive(Error, Debug)]
 pub enum ExchangeError {
     #[error("Channel send failed")]
@@ -21,27 +23,27 @@ pub enum ExchangeError {
     OrderBookAccessError(Symbol),
 }
 pub struct Exchange {
-    pub orderbooks: FxHashMap<Symbol, OrderBook>,
+    pub orderbooks: [Option<OrderBook>; MAX_SYMBOLS],
     pub event_tx: EventDispatcher,
-    seqs: [Sequence; 16],
+    seqs: [Sequence; MAX_SYMBOLS],
     risk_engine: RiskEngine,
 }
 
 impl Exchange {
     pub fn new(p: SingleProducer<EventEnvelope, MultiConsumerBarrier>) -> Self {
         Self {
-            orderbooks: FxHashMap::default(),  // empty
+            orderbooks: Default::default(),
             event_tx: EventDispatcher::new(p), // sender
-            seqs: [0; 16],
+            seqs: [0; MAX_SYMBOLS],
             risk_engine: RiskEngine::new_empty(),
         }
     }
 
     pub fn new_with_risk_engine(p: SingleProducer<EventEnvelope, MultiConsumerBarrier>, risk_engine: RiskEngine) -> Self {
         Self {
-            orderbooks: FxHashMap::default(),
+            orderbooks: Default::default(),
             event_tx: EventDispatcher::new(p),
-            seqs: [0; 16],
+            seqs: [0; MAX_SYMBOLS],
             risk_engine,
         }
     }
@@ -62,16 +64,36 @@ impl Exchange {
         self.risk_engine.get_exchange_account_mut()
     }
 
+    #[inline(always)]
+    pub fn get_orderbook(&self, symbol: Symbol) -> Result<&OrderBook, ExchangeError> {
+        let idx = symbol.index();
+        self.orderbooks
+            .get(idx)
+            .and_then(Option::as_ref)
+            .ok_or(ExchangeError::OrderBookAccessError(symbol))
+    }
+
+    #[inline(always)]
+    pub fn get_orderbook_mut(&mut self, symbol: Symbol) -> Result<&mut OrderBook, ExchangeError> {
+        let idx = symbol.index();
+        self.orderbooks
+            .get_mut(idx)
+            .and_then(Option::as_mut)
+            .ok_or(ExchangeError::OrderBookAccessError(symbol))
+    }
+
     #[inline]
     pub fn next_seq(&mut self, symbol: &Symbol) -> Sequence {
-        let idx = *symbol as usize;
+        let idx = symbol.index();
         self.seqs[idx] += 1;
         self.seqs[idx]
     }
 
     pub fn add_new_orderbook(&mut self, symbol: Symbol) {
-        let orderbook = OrderBook::new();
-        self.orderbooks.insert(symbol, orderbook);
+        let idx = symbol.index();
+        if idx < MAX_SYMBOLS {
+            self.orderbooks[idx] = Some(OrderBook::new());
+        }
     }
 
     #[inline(always)]
@@ -79,7 +101,7 @@ impl Exchange {
         match cmd {
             ExchangeCommand::AddNewOrder(symbol, mut new_order) => {
                 if new_order.order_type == OrderType::Market {
-                    let book = self.orderbooks.get(&symbol).ok_or(ExchangeError::OrderBookAccessError(symbol))?;
+                    let book = self.get_orderbook(symbol)?;
                     match book.get_market_price(new_order.side) {
                         Some(market_price) => {
                             let slipped_price = match new_order.side {
@@ -131,7 +153,7 @@ impl Exchange {
                     return Ok(());
                 }
 
-                let book = self.orderbooks.get_mut(&symbol).ok_or(ExchangeError::OrderBookAccessError(symbol))?;
+                let book = self.get_orderbook_mut(symbol)?;
                 match book.add_order(order) {
                     Some(trades) => {
                         let seq = self.next_seq(&symbol);
@@ -176,7 +198,7 @@ impl Exchange {
                 }
             },
             ExchangeCommand::CancelOrder(symbol, order_id) => {
-                let book = self.orderbooks.get_mut(&symbol).ok_or(ExchangeError::OrderBookAccessError(symbol))?;
+                let book = self.get_orderbook_mut(symbol)?;
 
                 if let Some(order) = book.cancel_order(order_id) {
                     let internal_id = self.risk_engine.get_internal_id(order.user_id as ExternalUserId);
@@ -203,7 +225,7 @@ impl Exchange {
                 Ok(())
             },
             ExchangeCommand::ModifyOrder(symbol, modify_order) => {
-                let book = self.orderbooks.get_mut(&symbol).ok_or(ExchangeError::OrderBookAccessError(symbol))?;
+                let book = self.get_orderbook_mut(symbol)?;
 
                 match book.modify_order(modify_order) {
                     Some((old_order, trades)) => {
@@ -252,7 +274,7 @@ impl Exchange {
                 }
             },
             ExchangeCommand::PruneExpiredOrders(symbol, prune_order_type) => {
-                let book = self.orderbooks.get_mut(&symbol).ok_or(ExchangeError::OrderBookAccessError(symbol))?;
+                let book = self.get_orderbook_mut(symbol)?;
                 let mut expired_orders: domain::ExpredOrders = vec![];
                 let mut order_ids: OrderIds = vec![];
                 for o in book.iter_orders() {
@@ -365,6 +387,38 @@ impl Exchange {
                 .map_err(ExchangeError::ExchangeEventTrySendError)?;
         }
         Ok(())
+    }
+}
+
+impl std::ops::Index<Symbol> for Exchange {
+    type Output = OrderBook;
+
+    #[inline]
+    fn index(&self, symbol: Symbol) -> &Self::Output {
+        self.get_orderbook(symbol).expect("orderbook should exist for symbol")
+    }
+}
+
+impl std::ops::IndexMut<Symbol> for Exchange {
+    #[inline]
+    fn index_mut(&mut self, symbol: Symbol) -> &mut Self::Output {
+        self.get_orderbook_mut(symbol).expect("orderbook should exist for symbol")
+    }
+}
+
+impl std::ops::Index<&Symbol> for Exchange {
+    type Output = OrderBook;
+
+    #[inline]
+    fn index(&self, symbol: &Symbol) -> &Self::Output {
+        self.get_orderbook(*symbol).expect("orderbook should exist for symbol")
+    }
+}
+
+impl std::ops::IndexMut<&Symbol> for Exchange {
+    #[inline]
+    fn index_mut(&mut self, symbol: &Symbol) -> &mut Self::Output {
+        self.get_orderbook_mut(*symbol).expect("orderbook should exist for symbol")
     }
 }
 
@@ -739,7 +793,8 @@ mod tests {
                 },
             )]
         );
-        assert!(exchange.orderbooks[&SYMBOL].is_empty());
+        assert!(exchange.get_orderbook(SYMBOL).unwrap().is_empty());
+        assert!(exchange[SYMBOL].is_empty());
     }
 
     #[test]
@@ -1003,4 +1058,30 @@ mod tests {
         assert_eq!(ex_acc.available_balance, 0);
         assert_eq!(ex_acc.holdings.get_available_quantity(asset_id).unwrap_or(0), 0);
     }
+
+    #[test]
+    fn test_array_orderbook_access_and_uninitialized_error() {
+        let (mut exchange, _) = new_exchange();
+
+        // Symbol that has not been added returns OrderBookAccessError
+        assert!(matches!(
+            exchange.get_orderbook(Symbol::BtcInr),
+            Err(ExchangeError::OrderBookAccessError(Symbol::BtcInr))
+        ));
+        assert!(matches!(
+            exchange.get_orderbook_mut(Symbol::BtcInr),
+            Err(ExchangeError::OrderBookAccessError(Symbol::BtcInr))
+        ));
+
+        // Add orderbook
+        exchange.add_new_orderbook(Symbol::BtcInr);
+
+        // Access works through get_orderbook, get_orderbook_mut, Index, and direct array
+        assert!(exchange.get_orderbook(Symbol::BtcInr).is_ok());
+        assert!(exchange.get_orderbook_mut(Symbol::BtcInr).is_ok());
+        assert!(exchange[Symbol::BtcInr].is_empty());
+        assert!(exchange[&Symbol::BtcInr].is_empty());
+        assert!(exchange.orderbooks[Symbol::BtcInr.index()].as_ref().unwrap().is_empty());
+    }
 }
+

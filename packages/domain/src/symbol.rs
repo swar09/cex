@@ -3,44 +3,46 @@ use serde::{Deserialize, Serialize};
 use crate::types::AssetId;
 
 #[derive(Copy, Clone, Serialize, Deserialize, PartialEq, Hash, Eq, Debug)]
+#[repr(u8)]
 pub enum Symbol {
     // INR Markets
     #[serde(rename = "USDT-INR")]
-    UsdtInr,
+    UsdtInr = 0,
     #[serde(rename = "BTC-INR")]
-    BtcInr,
+    BtcInr = 1,
     #[serde(rename = "ETH-INR")]
-    EthInr,
+    EthInr = 2,
     #[serde(rename = "SOL-INR")]
-    SolInr,
+    SolInr = 3,
 
     // Tether (USDT) Global Markets
     #[serde(rename = "BTC-USDT")]
-    BtcUsdt,
+    BtcUsdt = 4,
     #[serde(rename = "ETH-USDT")]
-    EthUsdt,
+    EthUsdt = 5,
     #[serde(rename = "SOL-USDT")]
-    SolUsdt,
+    SolUsdt = 6,
     #[serde(rename = "BNB-USDT")]
-    BnbUsdt,
+    BnbUsdt = 7,
     #[serde(rename = "XRP-USDT")]
-    XrpUsdt,
+    XrpUsdt = 8,
 
     // USDC Stable Coin Markets
     #[serde(rename = "BTC-USDC")]
-    BtcUsdc,
+    BtcUsdc = 9,
     #[serde(rename = "ETH-USDC")]
-    EthUsdc,
+    EthUsdc = 10,
 
     // Fiat Stable Coin Market
     #[serde(rename = "INR-USDT")]
-    InrUsdt,
+    InrUsdt = 11,
 
     #[serde(rename = "UNKNOWN")]
-    Unknown,
+    Unknown = 12,
 }
 
 impl Symbol {
+    pub const COUNT: usize = 13;
     pub const ALL: [Symbol; 12] = [
         Symbol::BnbUsdt,
         Symbol::BtcInr,
@@ -55,6 +57,10 @@ impl Symbol {
         Symbol::UsdtInr,
         Symbol::XrpUsdt,
     ];
+    #[inline(always)]
+    pub const fn index(&self) -> usize {
+        *self as usize
+    }
     pub fn as_str(&self) -> &'static str {
         match self {
             Symbol::BnbUsdt => "BNB-USDT",
