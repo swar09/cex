@@ -16,9 +16,6 @@ use tokio::sync::broadcast::Receiver;
 
 use crate::AppState;
 
-// also add auth middleware here
-// auth once and get persistent connection using webscokets
-
 pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
     ws.on_upgrade(|socket| handle(socket, state))
 }

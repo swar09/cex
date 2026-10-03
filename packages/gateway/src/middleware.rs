@@ -9,7 +9,7 @@ use axum_extra::{
     TypedHeader,
     headers::{Authorization, authorization::Bearer},
 };
-use jsonwebtoken::decode_header;
+use jsonwebtoken::{DecodingKey, Validation, decode, decode_header};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -28,7 +28,7 @@ pub enum Audience {
     Users,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Claims {
     pub iss: String,    // issuer (multiple services can assign tokens)
     pub sub: Uuid,      // subject (issued to)
@@ -40,6 +40,7 @@ pub struct Claims {
     pub jti: Uuid,      // token id for jwt blocking purposes
 }
 
+#[derive(Debug, Clone)]
 pub struct AuthUser {
     pub user_id: Uuid,
     pub jti: Uuid,
@@ -49,7 +50,7 @@ pub struct AuthUser {
 impl FromRequestParts<Arc<AppState>> for AuthUser {
     type Rejection = StatusCode;
 
-    async fn from_request_parts(parts: &mut Parts, _state: &Arc<AppState>) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, state: &Arc<AppState>) -> Result<Self, Self::Rejection> {
         let TypedHeader(Authorization(bearer)) = parts
             .extract::<TypedHeader<Authorization<Bearer>>>()
             .await
@@ -57,24 +58,29 @@ impl FromRequestParts<Arc<AppState>> for AuthUser {
 
         let token = bearer.token();
         let jwt_header = decode_header(token).map_err(|_| StatusCode::UNAUTHORIZED)?;
-        let Some(_kid) = jwt_header.kid else {
+        let Some(kid) = jwt_header.kid else {
             return Err(StatusCode::UNAUTHORIZED);
         };
 
-        // let jwk = get_or_fetch() : first get jwk from cache if not then fetch
-        // JWKS in cache from well_known json
-        // let decoding key from jwk
-        // then decode using decoding key
-        // if yes then verify the nbf , exp,
-        // check jti from auth-service-cache
-        // reject if any stage fails
-        // handle aud if needed or remove it
+        let jwk = state.cache.get_or_fetch_jwk(&kid).await.map_err(|_| StatusCode::UNAUTHORIZED)?;
 
-        todo!();
-        // Ok(AuthUser {
-        //     user_id: claims.sub,
-        //     jti: claims.jti,
-        //     exp: claims.exp,
-        // })
+        let decoding_key = DecodingKey::from_jwk(&jwk).map_err(|_| StatusCode::UNAUTHORIZED)?;
+
+        let mut validation = Validation::new(jwt_header.alg);
+        validation.validate_nbf = true;
+
+        let token_data = decode::<Claims>(token, &decoding_key, &validation).map_err(|_| StatusCode::UNAUTHORIZED)?;
+
+        let claims = token_data.claims;
+
+        if state.cache.is_blacklist(claims.jti).await.map_err(|_| StatusCode::UNAUTHORIZED)? {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+
+        Ok(AuthUser {
+            user_id: claims.sub,
+            jti: claims.jti,
+            exp: claims.exp,
+        })
     }
 }

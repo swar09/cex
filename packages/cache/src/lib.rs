@@ -14,31 +14,168 @@ use redis::{
 };
 use uuid::Uuid;
 
+pub const JWKS_DEFAULT_TTL_SEC: u64 = 3600;
+
 #[derive(Clone)]
 pub struct Cache {
-    pub connection_manager: ConnectionManager,
+    pub auth_conn: ConnectionManager,
+    pub replica_conn: ConnectionManager,
+    pub jwks_url: Option<String>,
 }
 
 impl Cache {
-    pub async fn new(redis_addr: &str) -> Result<Self, CacheError> {
+    pub async fn new(auth_redis_addr: &str, replica_redis_addr: &str, jwks_url: Option<String>) -> Result<Self, CacheError> {
         let config = ConnectionManagerConfig::new()
             .set_connection_timeout(Some(Duration::from_secs(3)))
             .set_response_timeout(Some(Duration::from_secs(2)));
-        let client = Client::open(redis_addr)?;
-        let connection_manager = ConnectionManager::new_with_config(client, config).await?;
+        let auth_client = Client::open(auth_redis_addr)?;
+        let auth_conn = ConnectionManager::new_with_config(auth_client, config.clone()).await?;
 
-        Ok(Cache { connection_manager })
+        let replica_client = Client::open(replica_redis_addr)?;
+        let replica_conn = ConnectionManager::new_with_config(replica_client, config).await?;
+
+        let cache = Cache {
+            auth_conn,
+            replica_conn,
+            jwks_url,
+        };
+
+        if cache.jwks_url.is_some()
+            && let Err(e) = cache.load_jwks().await
+        {
+            eprintln!("[cache] warning: startup JWKS load failed (will lazy-load on demand): {e}");
+        }
+
+        Ok(cache)
     }
 
-    pub async fn new_with_config(redis_addr: &str, config: ConnectionManagerConfig) -> Result<Self, CacheError> {
-        let client = Client::open(redis_addr)?;
-        let connection_manager = ConnectionManager::new_with_config(client, config).await?;
+    pub async fn from_env() -> Result<Self, CacheError> {
+        let auth_redis = std::env::var("REDIS_AUTH_URL")
+            .or_else(|_| std::env::var("REDIS_URL"))
+            .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
 
-        Ok(Cache { connection_manager })
+        let replica_redis = std::env::var("REDIS_READ_REPLICA_URL")
+            .or_else(|_| std::env::var("REDIS_URL"))
+            .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+
+        let jwks_url = std::env::var("AUTH_SERVICE_JWKS_URL").or_else(|_| std::env::var("JWKS_URL")).ok();
+
+        Self::new(&auth_redis, &replica_redis, jwks_url).await
+    }
+
+    pub async fn new_single(redis_addr: &str, jwks_url: Option<String>) -> Result<Self, CacheError> {
+        Self::new(redis_addr, redis_addr, jwks_url).await
+    }
+
+    pub async fn new_with_config(
+        auth_redis_addr: &str,
+        replica_redis_addr: &str,
+        jwks_url: Option<String>,
+        config: ConnectionManagerConfig,
+    ) -> Result<Self, CacheError> {
+        let auth_client = Client::open(auth_redis_addr)?;
+        let auth_conn = ConnectionManager::new_with_config(auth_client, config.clone()).await?;
+
+        let replica_client = Client::open(replica_redis_addr)?;
+        let replica_conn = ConnectionManager::new_with_config(replica_client, config).await?;
+
+        let cache = Cache {
+            auth_conn,
+            replica_conn,
+            jwks_url,
+        };
+
+        if cache.jwks_url.is_some()
+            && let Err(e) = cache.load_jwks().await
+        {
+            eprintln!("[cache] warning: startup JWKS load failed (will lazy-load on demand): {e}");
+        }
+
+        Ok(cache)
+    }
+
+    pub fn auth_connection(&self) -> ConnectionManager {
+        self.auth_conn.clone()
+    }
+
+    pub fn replica_connection(&self) -> ConnectionManager {
+        self.replica_conn.clone()
+    }
+
+    pub async fn fetch_jwks_from_endpoint(url_str: &str) -> Result<jsonwebtoken::jwk::JwkSet, CacheError> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let stripped = url_str
+            .strip_prefix("http://")
+            .ok_or_else(|| CacheError::FetchError(format!("Unsupported scheme in URL: {url_str}")))?;
+
+        let (host_port, path) = match stripped.find('/') {
+            Some(pos) => (&stripped[..pos], &stripped[pos..]),
+            None => (stripped, "/"),
+        };
+
+        let addr = if host_port.contains(':') {
+            host_port.to_string()
+        } else {
+            format!("{host_port}:80")
+        };
+
+        let mut stream = tokio::net::TcpStream::connect(&addr)
+            .await
+            .map_err(|e| CacheError::FetchError(format!("Failed to connect to {addr}: {e}")))?;
+
+        let request =
+            format!("GET {path} HTTP/1.1\r\nHost: {host_port}\r\nUser-Agent: cex-cache\r\nAccept: application/json\r\nConnection: close\r\n\r\n");
+
+        stream
+            .write_all(request.as_bytes())
+            .await
+            .map_err(|e| CacheError::FetchError(format!("Failed to write HTTP request: {e}")))?;
+
+        let mut response_bytes = Vec::new();
+        stream
+            .read_to_end(&mut response_bytes)
+            .await
+            .map_err(|e| CacheError::FetchError(format!("Failed to read HTTP response: {e}")))?;
+
+        let body_idx = response_bytes
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .ok_or_else(|| CacheError::FetchError("Malformed HTTP response: missing header delimiter".to_string()))?
+            + 4;
+
+        let body = &response_bytes[body_idx..];
+
+        if let Ok(jwk_set) = serde_json::from_slice::<jsonwebtoken::jwk::JwkSet>(body) {
+            return Ok(jwk_set);
+        }
+
+        if let Ok(single_jwk) = serde_json::from_slice::<jsonwebtoken::jwk::Jwk>(body) {
+            return Ok(jsonwebtoken::jwk::JwkSet { keys: vec![single_jwk] });
+        }
+
+        Err(CacheError::FetchError(format!("Failed to parse JWKS from {url_str}")))
+    }
+
+    pub async fn load_jwks(&self) -> Result<usize, CacheError> {
+        let Some(ref url) = self.jwks_url else {
+            return Ok(0);
+        };
+
+        let jwk_set = Self::fetch_jwks_from_endpoint(url).await?;
+        let count = jwk_set.keys.len();
+
+        for jwk in &jwk_set.keys {
+            if let Some(ref kid) = jwk.common.key_id {
+                self.set_jwk(kid, jwk, Some(JWKS_DEFAULT_TTL_SEC)).await?;
+            }
+        }
+
+        Ok(count)
     }
 
     pub async fn blacklist(&self, jti: Uuid, exp_rsec: u64) -> Result<bool, CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.auth_conn.clone();
         let options = SetOptions::default().with_expiration(redis::SetExpiry::EX(exp_rsec));
         let key = format!("blacklist:{jti}");
         let value = format!("{jti}");
@@ -48,7 +185,7 @@ impl Cache {
     }
 
     pub async fn is_blacklist(&self, jti: Uuid) -> Result<bool, CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.auth_conn.clone();
         let key = format!("blacklist:{jti}");
         let result: bool = conn.exists(key).await?;
 
@@ -56,7 +193,7 @@ impl Cache {
     }
 
     pub async fn get_jwk(&self, kid: &str) -> Result<Option<Jwk>, CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.auth_conn.clone();
         let key = format!("jwks:{kid}");
         let data: Option<String> = conn.get(key).await?;
         match data {
@@ -69,7 +206,7 @@ impl Cache {
     }
 
     pub async fn set_jwk(&self, kid: &str, jwk: &Jwk, exp_sec: Option<u64>) -> Result<(), CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.auth_conn.clone();
         let key = format!("jwks:{kid}");
         let json_str = serde_json::to_string(jwk)?;
         if let Some(ttl) = exp_sec {
@@ -81,7 +218,24 @@ impl Cache {
         Ok(())
     }
 
-    pub async fn get_or_fetch_jwk<F, Fut>(&self, kid: &str, fetch: F, exp_sec: Option<u64>) -> Result<Jwk, CacheError>
+    pub async fn get_or_fetch_jwk(&self, kid: &str) -> Result<Jwk, CacheError> {
+        // Step 1: Check Redis cache first
+        if let Some(cached) = self.get_jwk(kid).await? {
+            return Ok(cached);
+        }
+
+        // Step 2: Lazy load on demand if TTL expired or initial miss
+        if self.jwks_url.is_some() {
+            let _ = self.load_jwks().await?;
+            if let Some(cached) = self.get_jwk(kid).await? {
+                return Ok(cached);
+            }
+        }
+
+        Err(CacheError::NotFound(format!("kid '{kid}' not found in cache or JWKS endpoint")))
+    }
+
+    pub async fn get_or_fetch_jwk_with<F, Fut>(&self, kid: &str, fetch: F, exp_sec: Option<u64>) -> Result<Jwk, CacheError>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<Jwk, CacheError>>,
@@ -96,7 +250,7 @@ impl Cache {
     }
 
     pub async fn add_order(&self, order: &Order, exp_sec: u64) -> Result<bool, CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let options = SetOptions::default().with_expiration(redis::SetExpiry::EX(exp_sec));
         let key = format!("order:{}", order.order_id);
         let value = serde_json::to_string(order)?;
@@ -115,7 +269,7 @@ impl Cache {
     }
 
     pub async fn get_order(&self, order_id: OrderId) -> Result<Option<Order>, CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let key = format!("order:{order_id}");
         let result: Option<String> = conn.get(key).await?;
 
@@ -129,7 +283,7 @@ impl Cache {
     }
 
     pub async fn delete_order(&self, order_id: OrderId) -> Result<bool, CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let key = format!("order:{order_id}");
         let result: u32 = conn.del(key).await?;
 
@@ -141,7 +295,7 @@ impl Cache {
     }
 
     pub async fn expire_order(&self, order_id: OrderId, exp_sec: u64) -> Result<bool, CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let key = format!("order:{order_id}");
         let result: bool = conn.expire(key, exp_sec as i64).await?;
 
@@ -149,7 +303,7 @@ impl Cache {
     }
 
     pub async fn modify_order(&self, modify: &ModifyOrder) -> Result<Option<Order>, CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let key = format!("order:{}", modify.order_id);
 
         let Some(mut order) = self.get_order(modify.order_id).await? else {
@@ -184,7 +338,7 @@ impl Cache {
         match exp_sec {
             Some(ttl) => self.add_order(order, ttl).await,
             None => {
-                let mut conn = self.connection_manager.clone();
+                let mut conn = self.replica_conn.clone();
                 let key = format!("order:{}", order.order_id);
                 let value = serde_json::to_string(order)?;
                 let options = SetOptions::default().with_expiration(redis::SetExpiry::KEEPTTL);
@@ -218,7 +372,7 @@ impl Cache {
     }
 
     pub async fn set_replica_order(&self, order: &Order) -> Result<bool, CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let key = Self::replica_order_key(order.order_id);
         let value = serde_json::to_string(order)?;
         let result: Option<String> = conn.set(key, value).await?;
@@ -226,7 +380,7 @@ impl Cache {
     }
 
     pub async fn get_replica_order(&self, order_id: OrderId) -> Result<Option<Order>, CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let key = Self::replica_order_key(order_id);
         let result: Option<String> = conn.get(key).await?;
         match result {
@@ -243,7 +397,7 @@ impl Cache {
     }
 
     pub async fn delete_replica_order(&self, order_id: OrderId) -> Result<bool, CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let key = Self::replica_order_key(order_id);
         let result: u32 = conn.del(key).await?;
         Ok(result > 0)
@@ -262,7 +416,7 @@ impl Cache {
         if orders.is_empty() {
             return Ok(());
         }
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let mut pipe = redis::pipe();
         for order in orders {
             let key = Self::replica_order_key(order.order_id);
@@ -277,7 +431,7 @@ impl Cache {
         if order_ids.is_empty() {
             return Ok(());
         }
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let mut pipe = redis::pipe();
         for order_id in order_ids {
             let key = Self::replica_order_key(*order_id);
@@ -288,7 +442,7 @@ impl Cache {
     }
 
     pub async fn set_book_order_ids(&self, symbol: &str, side: &str, price_level: Price, order_ids: &[OrderId]) -> Result<(), CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let key = Self::book_price_level_key(symbol, side, price_level);
         let mut pipe = redis::pipe();
         pipe.del(&key);
@@ -300,7 +454,7 @@ impl Cache {
     }
 
     pub async fn push_book_order_id(&self, symbol: &str, side: &str, price_level: Price, order_id: OrderId) -> Result<(), CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let key = Self::book_price_level_key(symbol, side, price_level);
         let _: () = conn.rpush(key, order_id).await?;
         Ok(())
@@ -310,35 +464,35 @@ impl Cache {
         if order_ids.is_empty() {
             return Ok(());
         }
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let key = Self::book_price_level_key(symbol, side, price_level);
         let _: () = conn.rpush(key, order_ids).await?;
         Ok(())
     }
 
     pub async fn get_book_order_ids(&self, symbol: &str, side: &str, price_level: Price) -> Result<Vec<OrderId>, CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let key = Self::book_price_level_key(symbol, side, price_level);
         let ids: Vec<OrderId> = conn.lrange(key, 0, -1).await?;
         Ok(ids)
     }
 
     pub async fn remove_book_order_id(&self, symbol: &str, side: &str, price_level: Price, order_id: OrderId) -> Result<bool, CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let key = Self::book_price_level_key(symbol, side, price_level);
         let count: u32 = conn.lrem(key, 0, order_id).await?;
         Ok(count > 0)
     }
 
     pub async fn pop_book_order_id(&self, symbol: &str, side: &str, price_level: Price) -> Result<Option<OrderId>, CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let key = Self::book_price_level_key(symbol, side, price_level);
         let id: Option<OrderId> = conn.lpop(key, None).await?;
         Ok(id)
     }
 
     pub async fn delete_book_price_level(&self, symbol: &str, side: &str, price_level: Price) -> Result<bool, CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let key = Self::book_price_level_key(symbol, side, price_level);
         let count: u32 = conn.del(key).await?;
         Ok(count > 0)
@@ -372,14 +526,14 @@ impl Cache {
     }
 
     pub async fn set_account_balance(&self, external_user_id: ExternalUserId, balance: Balance) -> Result<bool, CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let key = Self::account_balance_key(external_user_id);
         let result: Option<String> = conn.set(key, balance).await?;
         Ok(result.as_deref() == Some("OK") || result.is_none())
     }
 
     pub async fn get_account_balance(&self, external_user_id: ExternalUserId) -> Result<Option<Balance>, CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let key = Self::account_balance_key(external_user_id);
         let result: Option<Balance> = conn.get(key).await?;
         Ok(result)
@@ -390,35 +544,35 @@ impl Cache {
     }
 
     pub async fn delete_account_balance(&self, external_user_id: ExternalUserId) -> Result<bool, CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let key = Self::account_balance_key(external_user_id);
         let count: u32 = conn.del(key).await?;
         Ok(count > 0)
     }
 
     pub async fn increment_account_balance(&self, external_user_id: ExternalUserId, amount: Balance) -> Result<Balance, CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let key = Self::account_balance_key(external_user_id);
         let new_balance: Balance = conn.incr(key, amount).await?;
         Ok(new_balance)
     }
 
     pub async fn decrement_account_balance(&self, external_user_id: ExternalUserId, amount: Balance) -> Result<Balance, CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let key = Self::account_balance_key(external_user_id);
         let new_balance: Balance = conn.decr(key, amount).await?;
         Ok(new_balance)
     }
 
     pub async fn set_account_holding(&self, external_user_id: ExternalUserId, symbol: &str, quantity: Quantity) -> Result<bool, CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let key = Self::account_holding_key(external_user_id, symbol);
         let result: Option<String> = conn.set(key, quantity as u64).await?;
         Ok(result.as_deref() == Some("OK") || result.is_none())
     }
 
     pub async fn get_account_holding(&self, external_user_id: ExternalUserId, symbol: &str) -> Result<Option<Quantity>, CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let key = Self::account_holding_key(external_user_id, symbol);
         let result: Option<u64> = conn.get(key).await?;
         Ok(result.map(|q| q as Quantity))
@@ -429,7 +583,7 @@ impl Cache {
     }
 
     pub async fn delete_account_holding(&self, external_user_id: ExternalUserId, symbol: &str) -> Result<bool, CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let key = Self::account_holding_key(external_user_id, symbol);
         let count: u32 = conn.del(key).await?;
         Ok(count > 0)
@@ -441,7 +595,7 @@ impl Cache {
         symbol: &str,
         quantity: Quantity,
     ) -> Result<Quantity, CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let key = Self::account_holding_key(external_user_id, symbol);
         let new_qty: u64 = conn.incr(key, quantity as u64).await?;
         Ok(new_qty as Quantity)
@@ -453,7 +607,7 @@ impl Cache {
         symbol: &str,
         quantity: Quantity,
     ) -> Result<Quantity, CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let key = Self::account_holding_key(external_user_id, symbol);
         let new_qty: u64 = conn.decr(key, quantity as u64).await?;
         Ok(new_qty as Quantity)
@@ -499,7 +653,7 @@ impl Cache {
     }
 
     pub async fn execute_pipeline<T: redis::FromRedisValue>(&self, pipe: &redis::Pipeline) -> Result<T, CacheError> {
-        let mut conn = self.connection_manager.clone();
+        let mut conn = self.replica_conn.clone();
         let res = pipe.query_async(&mut conn).await?;
         Ok(res)
     }

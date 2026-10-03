@@ -1,5 +1,7 @@
 use domain::{AssetId, OrderId, OrderType, Price, Quantity, Side, UserId};
+use serde::{Deserialize, Serialize};
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct NewOrderReq {
     pub user_id: UserId,
     pub asset_id: AssetId,
