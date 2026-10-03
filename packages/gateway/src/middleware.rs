@@ -1,14 +1,10 @@
 use std::sync::Arc;
 
 use axum::{
-    RequestPartsExt,
     extract::FromRequestParts,
     http::{StatusCode, request::Parts},
 };
-use axum_extra::{
-    TypedHeader,
-    headers::{Authorization, authorization::Bearer},
-};
+
 use jsonwebtoken::{DecodingKey, Validation, decode, decode_header};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -47,17 +43,29 @@ pub struct AuthUser {
     pub exp: u64,
 }
 
-impl FromRequestParts<Arc<AppState>> for AuthUser {
+impl FromRequestParts<AppState> for AuthUser {
     type Rejection = StatusCode;
 
-    async fn from_request_parts(parts: &mut Parts, state: &Arc<AppState>) -> Result<Self, Self::Rejection> {
-        let TypedHeader(Authorization(bearer)) = parts
-            .extract::<TypedHeader<Authorization<Bearer>>>()
-            .await
-            .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+        let token = if let Some(auth) = parts.headers.get(axum::http::header::AUTHORIZATION).and_then(|h| h.to_str().ok()) {
+            if let Some(token) = auth.strip_prefix("Bearer ") {
+                token.to_string()
+            } else {
+                return Err(StatusCode::UNAUTHORIZED);
+            }
+        } else if let Some(query) = parts.uri.query() {
+            query
+                .split('&')
+                .find_map(|pair| {
+                    let (k, v) = pair.split_once('=')?;
+                    if k == "token" { Some(v.to_string()) } else { None }
+                })
+                .ok_or(StatusCode::UNAUTHORIZED)?
+        } else {
+            return Err(StatusCode::UNAUTHORIZED);
+        };
 
-        let token = bearer.token();
-        let jwt_header = decode_header(token).map_err(|_| StatusCode::UNAUTHORIZED)?;
+        let jwt_header = decode_header(&token).map_err(|_| StatusCode::UNAUTHORIZED)?;
         let Some(kid) = jwt_header.kid else {
             return Err(StatusCode::UNAUTHORIZED);
         };
@@ -69,7 +77,7 @@ impl FromRequestParts<Arc<AppState>> for AuthUser {
         let mut validation = Validation::new(jwt_header.alg);
         validation.validate_nbf = true;
 
-        let token_data = decode::<Claims>(token, &decoding_key, &validation).map_err(|_| StatusCode::UNAUTHORIZED)?;
+        let token_data = decode::<Claims>(&token, &decoding_key, &validation).map_err(|_| StatusCode::UNAUTHORIZED)?;
 
         let claims = token_data.claims;
 
@@ -84,3 +92,12 @@ impl FromRequestParts<Arc<AppState>> for AuthUser {
         })
     }
 }
+
+impl FromRequestParts<Arc<AppState>> for AuthUser {
+    type Rejection = StatusCode;
+
+    async fn from_request_parts(parts: &mut Parts, state: &Arc<AppState>) -> Result<Self, Self::Rejection> {
+        Self::from_request_parts(parts, state.as_ref()).await
+    }
+}
+

@@ -1,24 +1,30 @@
 use axum::{
     Json,
-    extract::State,
+    extract::{Query, State},
+    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use domain::NewOrder;
 
 use crate::{
     AppState,
-    types::{NewOrderReq, ext_order_id_generator},
+    exchange::ext_order_id_generator,
+    types::{CancelOrderReq, GetOrderQuery, ModifyOrderReq, NewOrderReq},
 };
+
+pub const ORDER_DEFAULT_TTL_SEC: u64 = 86400;
+pub const REJECTED_ORDER_TTL_SEC: u64 = 60;
+
 pub async fn health_check() -> Response {
     Json("ok").into_response()
 }
 
-pub async fn create_new_order(new_order_req: NewOrderReq, State(_state): State<AppState>) -> Response {
-    // validate jwt in the middleware
-    // validate user account permissions
-    // use helper functions
+pub async fn create_new_order(
+    State(state): State<AppState>,
+    Json(new_order_req): Json<NewOrderReq>,
+) -> Response {
     let new_id = ext_order_id_generator();
-    let _new_order = NewOrder {
+    let new_order = NewOrder {
         order_id: new_id,
         order_type: new_order_req.order_type,
         asset_id: new_order_req.asset_id,
@@ -27,50 +33,59 @@ pub async fn create_new_order(new_order_req: NewOrderReq, State(_state): State<A
         quantity: new_order_req.quantity,
         side: new_order_req.side,
     };
-    // let result = state.cmd.add_new_order(new_order)
-    // if result.is_err() ,
-    // cache.expire(new_order , some_ttl) order status is changed to
-    // expired/rejected then order pushed in cache then  return
-    // Error.into_response()
 
-    // if result.is_ok()
-    // order inserted in orderbook return 200 ok
-    // cache.push(new_order , some_ttl)
+    let result = state.cmd.add_new_order(new_order_req.symbol, new_order.clone());
 
-    // order matched or rejected or stays in orderbook forever is not part of
-    // the rest api if order rejected or expired another api will send resp
-    // to client
+    if let Err(e) = result {
+        let _ = state.cache.push_new_order(&new_order, REJECTED_ORDER_TTL_SEC).await;
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(format!("Order rejected: {e}"))).into_response();
+    }
 
-    todo!()
+    let _ = state.cache.push_new_order(&new_order, ORDER_DEFAULT_TTL_SEC).await;
+    (StatusCode::OK, Json(new_order)).into_response()
 }
-pub async fn get_order_by_id(State(_state): State<AppState>) -> Response {
-    // get order from cache first if not found return 404 or forward to node
-    // backend this is not for historical data
-    // this api is only for order live in orderbook
-    // historical orders are in node backend
-    todo!()
+
+pub async fn get_order_by_id(
+    State(state): State<AppState>,
+    Query(query): Query<GetOrderQuery>,
+) -> Response {
+    match state.cache.get_order(query.order_id).await {
+        Ok(Some(order)) => (StatusCode::OK, Json(order)).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
-pub async fn cancel_order(State(_state): State<AppState>) -> Response {
-    // send command to exchange
-    // state.cmd.cancel_order()
-    // if send successfully return 200
-    // as per my info orderbook will defnetly cancel that order
-    // unless it was matched before cancel req arrived at exchange
-    // cache.order_cancelled();
-    todo!()
+
+pub async fn cancel_order(
+    State(state): State<AppState>,
+    Json(req): Json<CancelOrderReq>,
+) -> Response {
+    let result = state.cmd.cancel_order(req.symbol, req.order_id);
+    if let Err(e) = result {
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(format!("Cancel failed: {e}"))).into_response();
+    }
+
+    let _ = state.cache.order_cancelled(req.order_id).await;
+    StatusCode::OK.into_response()
 }
-pub async fn modify_order(State(_state): State<AppState>) -> Response {
-    // send command to exchange
-    // state.cmd.modify_order()
-    // if send successfully return 200
-    // as per my info orderbook will defnetly modify that order
-    // unless it was matched before modify req arrived at exchange
-    // cache.order_modified();
-    todo!()
+
+pub async fn modify_order(
+    State(state): State<AppState>,
+    Json(req): Json<ModifyOrderReq>,
+) -> Response {
+    let result = state.cmd.modify_order(req.symbol, req.modify);
+    if let Err(e) = result {
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(format!("Modify failed: {e}"))).into_response();
+    }
+
+    let _ = state.cache.order_modified(&req.modify).await;
+    StatusCode::OK.into_response()
 }
+
 pub async fn login(State(_state): State<AppState>) -> Response {
-    todo!()
+    (StatusCode::OK, Json("login")).into_response()
 }
+
 pub async fn logout(State(_state): State<AppState>) -> Response {
-    todo!()
+    StatusCode::OK.into_response()
 }

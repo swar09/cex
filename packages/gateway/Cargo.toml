@@ -16,3 +16,5 @@ uuid = { version = "1.26.1", features = ["serde"] }
 jsonwebtoken = "11.1.0"
 serde = "1.0.229"
 disruptor = "4.4.0"
+bincode = "1.3"
+
