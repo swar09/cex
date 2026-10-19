@@ -1,8 +1,17 @@
 {
-  "name": "cex-monorepo",
+  "name": "cex",
   "private": true,
   "workspaces": [
     "apps/*",
-    "packages/*"
-  ]
+    "packages/*",
+    "workers/*"
+  ],
+  "module": "index.ts",
+  "type": "module",
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^7"
+  }
 }

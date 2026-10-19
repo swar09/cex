@@ -1,14 +1,14 @@
 [workspace]
 resolver = "2"
 members = [
-    "bin/server",
-    "packages/domain",
-    "packages/engine",
-    "packages/gateway",
-    "packages/cache",
-    "packages/workers",
-    "packages/risk",
-    "packages/queue",
+    "rust/bin/server",
+    "rust/domain",
+    "rust/engine",
+    "rust/gateway",
+    "rust/cache",
+    "rust/workers",
+    "rust/risk",
+    "rust/queue",
 ]
 
 [profile.release]
