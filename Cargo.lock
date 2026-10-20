@@ -71,6 +71,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "api-gateway"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-extra",
+ "jsonwebtoken",
+ "redis",
+ "serde_json",
+ "tokio",
+ "tower",
+]
+
+[[package]]
 name = "arc-swap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2177,6 +2190,7 @@ dependencies = [
  "signal-hook-registry",
  "socket2",
  "tokio-macros",
+ "tracing",
  "windows-sys",
 ]
 
