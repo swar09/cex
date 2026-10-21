@@ -219,12 +219,10 @@ impl Cache {
     }
 
     pub async fn get_or_fetch_jwk(&self, kid: &str) -> Result<Jwk, CacheError> {
-        // Step 1: Check Redis cache first
         if let Some(cached) = self.get_jwk(kid).await? {
             return Ok(cached);
         }
 
-        // Step 2: Lazy load on demand if TTL expired or initial miss
         if self.jwks_url.is_some() {
             let _ = self.load_jwks().await?;
             if let Some(cached) = self.get_jwk(kid).await? {
