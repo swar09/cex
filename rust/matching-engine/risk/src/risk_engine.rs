@@ -65,7 +65,7 @@ impl AccountStatus {
 pub const MAX_ASSETS: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Holdings {
+pub struct          Holdings {
     pub reserved: [Quantity; MAX_ASSETS],
     pub available: [Quantity; MAX_ASSETS],
 }

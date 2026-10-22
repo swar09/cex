@@ -1,14 +1,17 @@
-use std::pin::Pin;
+use std::{pin::Pin, sync::Arc};
 
 use axum::{
+    body::Body,
     extract::Request,
     http::{Error, StatusCode, header::AUTHORIZATION},
     response::{IntoResponse, Response},
 };
-use jsonwebtoken::decode_header;
+use jsonwebtoken::{DecodingKey, Validation, decode, decode_header};
 use serde::{Deserialize, Serialize};
 use tower::Service;
 use uuid::Uuid;
+
+use crate::cache::cache::Cache;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Claims {
@@ -40,12 +43,17 @@ pub enum UserRole {
     Partner, // partners traders
     Bot,     // trading bot with api key
 }
-
-struct AuthLayer {
-    // inner :
+#[derive(Clone)]
+struct AuthState {
+    pub cache: Cache,
 }
 
-impl Service<Request> for AuthLayer {
+struct AuthLayer<S> {
+    inner: S,
+    pub state: Arc<AuthState>,
+}
+
+impl<S> Service<Request> for AuthLayer<S> {
     type Response = Response;
     type Error = Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
@@ -55,35 +63,58 @@ impl Service<Request> for AuthLayer {
     }
 
     fn call(&mut self, req: Request) -> Self::Future {
-        let Some(jwt_header) = req
+        let token = match req
             .headers()
             .get(AUTHORIZATION)
             .and_then(|h| h.to_str().ok())
             .and_then(|t| t.strip_prefix("Bearer "))
-            .and_then(|jwt| decode_header(jwt).ok())
-        else {
-            return reject(StatusCode::UNAUTHORIZED);
+        {
+            Some(t) => t.to_owned(),
+            None => {
+                return reject(StatusCode::UNAUTHORIZED);
+            },
         };
 
-        let Some(kid) = jwt_header.kid else {
-            return reject(StatusCode::UNAUTHORIZED);
+        let jwt_header = match decode_header(&token) {
+            Ok(header) => header.to_owned(),
+            Err(_) => {
+                return reject(StatusCode::UNAUTHORIZED);
+            },
         };
 
-        // let jwk = cache.get_jwk(kid) ? return 500;
-        // let decoding_key = DecodingKey::from_jwk(&jwk) ? return 500;
-        // let mut validation = Validation::new(jwt_header.alg);
-        // validation.validate_nbf = true;
-        // validation.validate_aud = false;
+        let kid = match jwt_header.kid {
+            Some(k) => k,
+            None => {
+                return reject(StatusCode::UNAUTHORIZED);
+            },
+        };
 
-        // let token_data = decode::<Claims>(&token, &decoding_key, &validation) ? return Unauth
-        // let claims = token_data.claims;
+        let state = self.state.clone();
+        Box::pin(async move {
+            let Some(jwk) = state.cache.get_jwk(&kid).await.unwrap() else {
+                // cache miss
+                // retry
+                todo!()
+            };
+            // error handling
 
-        // if state.cache.is_blacklist(claims.jti).await ? return 500 {
-        //     return reject(StatusCode::UNAUTHORIZED);
-        // }
+            // algo in the jwk and also in the header ????
 
-        
-        todo!()
+            let decoding_key = DecodingKey::from_jwk(&jwk).unwrap();
+
+            let mut validation = Validation::new(jwt_header.alg);
+            validation.validate_nbf = true;
+            validation.validate_aud = false;
+
+            let claims = match decode::<Claims>(&token, &decoding_key, &validation) {
+                Ok(t) => t.claims,
+                Err(e) => {
+                    return Ok(StatusCode::UNAUTHORIZED.into_response());
+                },
+            };
+
+            Ok(Response::new(Body::empty()))
+        })
     }
 }
 

@@ -4,8 +4,13 @@ use redis::{
     aio::{ConnectionManager, ConnectionManagerConfig},
 };
 use regex::Regex;
-use reqwest::{Client as HttpClient};
-use std::{error::Error, sync::LazyLock, time::Duration};
+use reqwest::Client as HttpClient;
+use std::{
+    collections::HashMap,
+    error::Error,
+    sync::{Arc, LazyLock, Mutex, atomic::AtomicBool},
+    time::Duration,
+};
 use thiserror::Error;
 use uuid::Uuid;
 use validator::{Validate, ValidationErrors};
@@ -33,8 +38,10 @@ pub enum CacheError {
 
 #[derive(Clone)]
 pub struct Cache {
-    pub auth_conn: ConnectionManager,
+    auth_conn: ConnectionManager,
+    local_cache: Arc<Mutex<HashMap<String, Jwk>>>,
     jwks_client: JwksClient,
+    cool_down: Arc<AtomicBool>,
 }
 
 impl Cache {
@@ -44,8 +51,14 @@ impl Cache {
             .set_response_timeout(Some(Duration::from_secs(2)));
         let auth_client = Client::open(auth_redis_addr)?;
         let auth_conn = ConnectionManager::new_with_config(auth_client, config.clone()).await?;
-
-        let cache = Cache { auth_conn, jwks_client };
+        let local_cache = Arc::new(Mutex::new(HashMap::new()));
+        let cool_down = Arc::new(AtomicBool::new(false));
+        let cache = Cache {
+            auth_conn,
+            local_cache,
+            jwks_client,
+            cool_down,
+        };
 
         match cache.load_jwks().await {
             Ok(b) => {
