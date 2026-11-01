@@ -76,6 +76,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "axum-extra",
+ "fastrand",
  "jsonwebtoken",
  "redis",
  "regex",
@@ -85,6 +86,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tower",
+ "tracing",
  "uuid",
  "validator",
 ]
@@ -2972,7 +2974,19 @@ checksum = "63e71662fa4b2a2c3a26f570f037eb95bb1f85397f3cd8076caed2f026a6d100"
 dependencies = [
  "log",
  "pin-project-lite",
+ "tracing-attributes",
  "tracing-core",
+]
+
+[[package]]
+name = "tracing-attributes"
+version = "0.1.31"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7490cfa5ec963746568740651ac6781f701c9c5ea257c58e057f3ba8cf69e8da"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -3054,6 +3068,7 @@ version = "1.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cc1186384beb7dd8eedea376413fd654937285ea6c9cfbb928dc3043ea4b606"
 dependencies = [
+ "getrandom 0.4.3",
  "js-sys",
  "serde_core",
  "wasm-bindgen",
