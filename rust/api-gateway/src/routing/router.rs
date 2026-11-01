@@ -6,7 +6,7 @@ use axum::{
     routing::{any, get, post},
 };
 
-use crate::middleware::{
+use crate::layers::{
     AuthLayer, AuthState, ContentLengthLimitLayer, HeaderSanitizeLayer, TimeoutLayer, TraceLayer,
 };
 
@@ -59,7 +59,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
     use crate::{
         cache::cache::{Cache, JwksClient},
-        middleware::auth::{Audience, Claims, UserRole},
+        layers::auth::{Audience, Claims, UserRole},
     };
 
     fn sample_jwk() -> (Jwk, EncodingKey) {

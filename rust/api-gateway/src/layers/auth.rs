@@ -60,7 +60,7 @@ pub fn is_valid_kid(kid: &str) -> bool {
     kid.len() == 32 && kid.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// Shared state for authentication middleware.
+/// Shared state for authentication layer.
 #[derive(Clone)]
 pub struct AuthState {
     /// In-memory JWKS cache and blacklist client.

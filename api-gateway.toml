@@ -1,0 +1,17 @@
+# API Gateway Configuration
+
+[server]
+host = "0.0.0.0"
+port = 8080
+
+[auth]
+jwks_endpoint = "https://auth.internal/.well_known/jwks.json"
+
+[redis]
+url = "redis://127.0.0.1:6379"
+
+[limits]
+max_content_length_bytes = 10485760 # 10 MB
+request_timeout_secs = 30
+min_cooldown_secs = 60
+max_cooldown_secs = 240
