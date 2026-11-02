@@ -15,3 +15,11 @@ max_content_length_bytes = 10485760 # 10 MB
 request_timeout_secs = 30
 min_cooldown_secs = 60
 max_cooldown_secs = 240
+
+[services]
+orders = "http://order-service:8081"
+engine = "http://engine-service:8082"
+ledger = "http://ledger-service:8083"
+user = "http://user-service:8084"
+kyc = "http://kyc-service:8085"
+auth = "http://auth-service:8086"

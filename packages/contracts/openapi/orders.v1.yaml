@@ -1,0 +1,392 @@
+openapi: 3.1.0
+info:
+  title: CEX Order Service API
+  version: 1.0.0
+  description: Order management, Kafka message publishing (partitioned by symbol), read-replica open orders, and Postgres historical order queries.
+
+paths:
+  /api/v1/orders:
+    post:
+      summary: Place a new single order (dispatched to Kafka partitioned by symbol)
+      operationId: placeOrder
+      parameters:
+        - $ref: '#/components/parameters/HeaderUserId'
+        - $ref: '#/components/parameters/HeaderUserRole'
+        - $ref: '#/components/parameters/HeaderRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrderRequest'
+      responses:
+        '202':
+          description: Order accepted and queued into Kafka topic
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderPlacementResponse'
+        '400':
+          description: Validation error or invalid price/tick size
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+
+    delete:
+      summary: Cancel all open orders (optionally scoped by symbol)
+      operationId: cancelAllOrders
+      parameters:
+        - $ref: '#/components/parameters/HeaderUserId'
+        - name: symbol
+          in: query
+          required: false
+          schema:
+            type: string
+            example: "BTC_USDT"
+      responses:
+        '200':
+          description: Mass cancellation requests dispatched to Kafka
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelAllResponse'
+        '401':
+          description: Unauthorized
+
+  /api/v1/orders/batch:
+    post:
+      summary: Place a batch of orders atomically (max 20 orders per request)
+      operationId: placeOrderBatch
+      parameters:
+        - $ref: '#/components/parameters/HeaderUserId'
+        - $ref: '#/components/parameters/HeaderUserRole'
+        - $ref: '#/components/parameters/HeaderRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchOrderRequest'
+      responses:
+        '202':
+          description: Batch accepted into Kafka
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchOrderResponse'
+        '400':
+          description: Exceeded batch ceiling or invalid items
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+
+  /api/v1/orders/{order_id}:
+    delete:
+      summary: Cancel a single active order
+      operationId: cancelOrder
+      parameters:
+        - name: order_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/HeaderUserId'
+        - name: symbol
+          in: query
+          required: true
+          description: Required to determine Kafka partition route
+          schema:
+            type: string
+            example: "BTC_USDT"
+      responses:
+        '202':
+          description: Cancellation request queued into Kafka
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderCancelResponse'
+        '400':
+          description: Missing symbol or invalid order_id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+
+  /api/v1/orders/open:
+    get:
+      summary: Query currently active orders from the read-replica cache
+      operationId: listOpenOrders
+      parameters:
+        - $ref: '#/components/parameters/HeaderUserId'
+        - name: symbol
+          in: query
+          required: false
+          schema:
+            type: string
+            example: "BTC_USDT"
+      responses:
+        '200':
+          description: Open orders list from cache
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/OrderRecord'
+        '401':
+          description: Unauthorized
+
+  /api/v1/orders/history:
+    get:
+      summary: Query historical executed and cancelled orders from Postgres DB
+      operationId: listOrderHistory
+      parameters:
+        - $ref: '#/components/parameters/HeaderUserId'
+        - name: symbol
+          in: query
+          required: false
+          schema:
+            type: string
+            example: "BTC_USDT"
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [filled, partially_filled, cancelled, rejected]
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Historical orders list from database
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/OrderRecord'
+        '401':
+          description: Unauthorized
+
+components:
+  parameters:
+    HeaderUserId:
+      name: x-user-id
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+    HeaderUserRole:
+      name: x-user-role
+      in: header
+      required: true
+      schema:
+        type: string
+        enum: [retail_trader, market_maker, market_taker, partner, admin]
+    HeaderRequestId:
+      name: x-request-id
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    CreateOrderRequest:
+      type: object
+      required:
+        - symbol
+        - side
+        - order_type
+        - amount
+      properties:
+        client_order_id:
+          type: string
+          nullable: true
+          description: Client-assigned idempotency tracking ID
+          example: "trader-uuid-1234"
+        symbol:
+          type: string
+          example: "BTC_USDT"
+        side:
+          type: string
+          enum: [buy, sell]
+          example: "buy"
+        order_type:
+          type: string
+          enum: [limit, market]
+          example: "limit"
+        price:
+          type: string
+          description: Required for limit orders; decimal string representation
+          pattern: "^\\d+(\\.\\d+)?$"
+          example: "68500.50"
+        amount:
+          type: string
+          description: Order quantity; decimal string representation
+          pattern: "^\\d+(\\.\\d+)?$"
+          example: "1.500000"
+
+    BatchOrderRequest:
+      type: object
+      required:
+        - orders
+      properties:
+        orders:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/CreateOrderRequest'
+
+    OrderPlacementResponse:
+      type: object
+      required:
+        - order_id
+        - symbol
+        - side
+        - status
+        - timestamp
+      properties:
+        order_id:
+          type: string
+          format: uuid
+        client_order_id:
+          type: string
+          nullable: true
+        symbol:
+          type: string
+        side:
+          type: string
+          enum: [buy, sell]
+        status:
+          type: string
+          enum: [received, queued]
+          example: "queued"
+        timestamp:
+          type: integer
+          description: Unix millisecond timestamp
+
+    BatchOrderResponse:
+      type: object
+      required:
+        - accepted_count
+        - orders
+      properties:
+        accepted_count:
+          type: integer
+          example: 5
+        orders:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderPlacementResponse'
+
+    OrderCancelResponse:
+      type: object
+      required:
+        - order_id
+        - status
+      properties:
+        order_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          example: "cancellation_queued"
+
+    CancelAllResponse:
+      type: object
+      required:
+        - cancelled_count
+        - symbol
+      properties:
+        cancelled_count:
+          type: integer
+          example: 3
+        symbol:
+          type: string
+          nullable: true
+          example: "BTC_USDT"
+
+    OrderRecord:
+      type: object
+      required:
+        - order_id
+        - user_id
+        - symbol
+        - side
+        - order_type
+        - amount
+        - filled_amount
+        - status
+        - created_at
+      properties:
+        order_id:
+          type: string
+          format: uuid
+        client_order_id:
+          type: string
+          nullable: true
+        user_id:
+          type: string
+          format: uuid
+        symbol:
+          type: string
+          example: "BTC_USDT"
+        side:
+          type: string
+          enum: [buy, sell]
+        order_type:
+          type: string
+          enum: [limit, market]
+        price:
+          type: string
+          nullable: true
+          pattern: "^\\d+(\\.\\d+)?$"
+        amount:
+          type: string
+          pattern: "^\\d+(\\.\\d+)?$"
+        filled_amount:
+          type: string
+          pattern: "^\\d+(\\.\\d+)?$"
+          example: "0.500000"
+        status:
+          type: string
+          enum: [new, partially_filled, filled, cancelled, rejected]
+          example: "new"
+        created_at:
+          type: integer
+          description: Unix millisecond timestamp
+
+    ErrorResponse:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          example: "INVALID_TICK_SIZE"
+        message:
+          type: string
+          example: "The price specified does not match the symbol minimum price increment."

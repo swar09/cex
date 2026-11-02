@@ -1,0 +1,155 @@
+openapi: 3.1.0
+info:
+  title: CEX Mock KYC Service API
+  version: 1.0.0
+  description: Sandbox KYC identity verification flow required before funding retail accounts.
+
+paths:
+  /api/v1/kyc/status:
+    get:
+      summary: Get current KYC verification status for authenticated user
+      operationId: getKycStatus
+      parameters:
+        - $ref: '#/components/parameters/HeaderUserId'
+      responses:
+        '200':
+          description: Current KYC state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KycStatusResponse'
+        '401':
+          description: Unauthorized
+
+  /api/v1/kyc/apply:
+    post:
+      summary: Submit identification documents for verification
+      operationId: applyKyc
+      parameters:
+        - $ref: '#/components/parameters/HeaderUserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/KycApplicationRequest'
+      responses:
+        '202':
+          description: KYC application accepted and set to pending
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KycStatusResponse'
+        '400':
+          description: Invalid document details or already verified
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+
+  /api/v1/kyc/simulate:
+    post:
+      summary: Testing endpoint to toggle pass/fail KYC verification
+      operationId: simulateKycResult
+      parameters:
+        - $ref: '#/components/parameters/HeaderUserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/KycSimulateRequest'
+      responses:
+        '200':
+          description: KYC status updated according to simulation prompt
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KycStatusResponse'
+        '400':
+          description: Invalid simulation action
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  parameters:
+    HeaderUserId:
+      name: x-user-id
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    KycStatusResponse:
+      type: object
+      required:
+        - user_id
+        - status
+        - updated_at
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [unverified, pending, verified, rejected]
+          example: "verified"
+        rejection_reason:
+          type: string
+          nullable: true
+          example: "Document expired or unreadable"
+        updated_at:
+          type: integer
+          description: Unix millisecond timestamp
+
+    KycApplicationRequest:
+      type: object
+      required:
+        - document_type
+        - document_number
+        - country
+      properties:
+        document_type:
+          type: string
+          enum: [passport, national_id, drivers_license]
+          example: "passport"
+        document_number:
+          type: string
+          example: "A12345678"
+        country:
+          type: string
+          description: ISO 3166-1 alpha-3 code
+          example: "USA"
+
+    KycSimulateRequest:
+      type: object
+      required:
+        - decision
+      properties:
+        decision:
+          type: string
+          enum: [pass, fail]
+          example: "pass"
+        reason:
+          type: string
+          description: Optional explanation when simulating failure
+          example: "Manual test rejection"
+
+    ErrorResponse:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          example: "ALREADY_VERIFIED"
+        message:
+          type: string
+          example: "User KYC is already verified."

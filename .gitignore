@@ -32,3 +32,4 @@ Thumbs.db
 data/
 data/wal/
 *.wal
+.agents/

@@ -1,3 +1,10 @@
+use std::{
+    collections::HashMap,
+    error::Error,
+    sync::{Arc, LazyLock, RwLock},
+    time::{Duration, Instant},
+};
+
 use jsonwebtoken::jwk::{Jwk, JwkSet};
 use redis::{
     AsyncCommands, Client, SetOptions,
@@ -5,19 +12,12 @@ use redis::{
 };
 use regex::Regex;
 use reqwest::Client as HttpClient;
-use std::{
-    collections::HashMap,
-    error::Error,
-    sync::{Arc, LazyLock, RwLock},
-    time::{Duration, Instant},
-};
 use thiserror::Error;
 use uuid::Uuid;
 use validator::{Validate, ValidationErrors};
 
-static JWKS_URL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^https://[^/#?]+/\.well_known/jwks\.json$").expect("Failed to compile JWKS URL regex")
-});
+static JWKS_URL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^https?://[^/#?]+/\.well_known/jwks\.json$").expect("Failed to compile JWKS URL regex"));
 
 const MIN_COOLDOWN_SECS: u64 = 60;
 const MAX_COOLDOWN_SECS: u64 = 240;
@@ -57,7 +57,8 @@ pub struct Cache {
 }
 
 impl Cache {
-    /// Constructs `Cache` connected to Redis for blacklist tracking with in-memory `RwLock` JWKS cache.
+    /// Constructs `Cache` connected to Redis for blacklist tracking with
+    /// in-memory `RwLock` JWKS cache.
     pub async fn new(auth_redis_addr: &str, jwks_client: JwksClient) -> Result<Self, CacheError> {
         let config = ConnectionManagerConfig::new()
             .set_connection_timeout(Some(Duration::from_secs(3)))
@@ -91,7 +92,8 @@ impl Cache {
         }
     }
 
-    /// Calculates random cooldown duration between 1 and 4 minutes (60-240 seconds).
+    /// Calculates random cooldown duration between 1 and 4 minutes (60-240
+    /// seconds).
     pub fn calculate_jitter_cooldown() -> Duration {
         let secs = fastrand::u64(MIN_COOLDOWN_SECS..=MAX_COOLDOWN_SECS);
         Duration::from_secs(secs)
@@ -99,12 +101,9 @@ impl Cache {
 
     /// Checks if request cooldown is currently active.
     pub fn is_cooldown_active(&self) -> bool {
-        if let Ok(guard) = self.cooldown_until.read() {
-            if let Some(until) = *guard {
-                return Instant::now() < until;
-            }
-        }
-        false
+        self.cooldown_until
+            .read()
+            .is_ok_and(|guard| (*guard).is_some_and(|until| Instant::now() < until))
     }
 
     /// Sets cooldown timestamp to expire after specified `duration`.
@@ -137,7 +136,8 @@ impl Cache {
         }
     }
 
-    /// Refills JWKS cache by fetching keys from endpoint and replacing in-memory map.
+    /// Refills JWKS cache by fetching keys from endpoint and replacing
+    /// in-memory map.
     pub async fn refill_jwks(&self) -> Result<bool, CacheError> {
         let set = self
             .jwks_client
@@ -157,7 +157,8 @@ impl Cache {
     }
 
     /// Retrieves `Jwk` by key ID (`kid`), reading from local cache first.
-    /// If missing and not under cooldown, lazy-fetches from JWKS endpoint and sets jittered cooldown.
+    /// If missing and not under cooldown, lazy-fetches from JWKS endpoint and
+    /// sets jittered cooldown.
     pub async fn get_or_fetch_jwk(&self, kid: &str) -> Result<Jwk, CacheError> {
         if let Some(jwk) = self.get_local_jwk(kid) {
             return Ok(jwk);
@@ -215,7 +216,6 @@ impl JwksClient {
     pub fn new(jwks_endpoint: String) -> Result<Self, JwksClientError> {
         let client = HttpClient::builder()
             .timeout(Duration::from_secs(5))
-            .https_only(true)
             .build()
             .map_err(JwksClientError::ClientBuild)?;
         let this = Self { client, jwks_endpoint };
@@ -273,11 +273,9 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     #[test]
     fn test_env_fallback_to_default() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = crate::TEST_ENV_LOCK.lock().unwrap();
         // Ensure no env vars set for test isolation
         unsafe {
             std::env::remove_var("GLOBAL_JWKS_ENDPOINT");
@@ -289,7 +287,7 @@ mod tests {
 
     #[test]
     fn test_env_resolution_precedence() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = crate::TEST_ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::set_var("GLOBAL_JWKS_ENDPOINT", "https://global.internal/.well_known/jwks.json");
             std::env::set_var("JWKS_ENDPOINT", "https://local.internal/.well_known/jwks.json");

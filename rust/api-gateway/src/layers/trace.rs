@@ -1,4 +1,4 @@
-use std::{pin::Pin, str::FromStr};
+use std::pin::Pin;
 
 use axum::{
     extract::Request,
@@ -47,12 +47,11 @@ where
     }
 
     fn call(&mut self, mut req: Request) -> Self::Future {
-        let request_id = req
-            .headers()
-            .get(&X_REQUEST_ID)
-            .and_then(|h| h.to_str().ok())
-            .and_then(|s| Uuid::from_str(s).ok())
-            .unwrap_or_else(Uuid::new_v4);
+        let request_id = Uuid::now_v7();
+
+        if let Ok(val) = HeaderValue::from_str(&request_id.to_string()) {
+            req.headers_mut().insert(X_REQUEST_ID.clone(), val);
+        }
 
         req.extensions_mut().insert(RequestId(request_id));
 
@@ -79,9 +78,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::str::FromStr;
+
     use axum::{body::Body, http::StatusCode};
     use tower::ServiceExt;
+
+    use super::*;
 
     #[derive(Clone)]
     struct EchoService;
@@ -99,16 +101,13 @@ mod tests {
             let id = req.extensions().get::<RequestId>().copied();
             Box::pin(async move {
                 let body = id.map(|i| i.0.to_string()).unwrap_or_default();
-                Ok(Response::builder()
-                    .status(StatusCode::OK)
-                    .body(Body::from(body))
-                    .unwrap())
+                Ok(Response::builder().status(StatusCode::OK).body(Body::from(body)).unwrap())
             })
         }
     }
 
     #[tokio::test]
-    async fn test_generates_request_id_when_missing() {
+    async fn test_generates_request_id_v7_when_missing() {
         let mut service = TraceService { inner: EchoService };
         let req = Request::builder().uri("/test").body(Body::empty()).unwrap();
 
@@ -116,12 +115,12 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
 
         let header = res.headers().get("x-request-id").expect("header must exist");
-        let parsed = Uuid::from_str(header.to_str().unwrap());
-        assert!(parsed.is_ok());
+        let parsed = Uuid::from_str(header.to_str().unwrap()).unwrap();
+        assert_eq!(parsed.get_version_num(), 7);
     }
 
     #[tokio::test]
-    async fn test_preserves_valid_request_id() {
+    async fn test_overwrites_client_supplied_request_id() {
         let incoming_id = Uuid::new_v4();
         let mut service = TraceService { inner: EchoService };
         let req = Request::builder()
@@ -132,6 +131,8 @@ mod tests {
 
         let res = service.ready().await.unwrap().call(req).await.unwrap();
         let header = res.headers().get("x-request-id").unwrap().to_str().unwrap();
-        assert_eq!(header, incoming_id.to_string());
+        let parsed = Uuid::from_str(header).unwrap();
+        assert_ne!(parsed, incoming_id);
+        assert_eq!(parsed.get_version_num(), 7);
     }
 }

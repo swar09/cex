@@ -66,11 +66,11 @@ where
             match val.to_str().ok().and_then(|s| s.parse::<u64>().ok()) {
                 Some(len) if len > self.max_bytes => {
                     return Box::pin(async move { Ok(StatusCode::PAYLOAD_TOO_LARGE.into_response()) });
-                }
-                Some(_) => {}
+                },
+                Some(_) => {},
                 None => {
                     return Box::pin(async move { Ok(StatusCode::BAD_REQUEST.into_response()) });
-                }
+                },
             }
         }
 
@@ -81,9 +81,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use axum::body::Body;
     use tower::ServiceExt;
+
+    use super::*;
 
     #[derive(Clone)]
     struct OkService;
@@ -108,11 +109,7 @@ mod tests {
             inner: OkService,
             max_bytes: 1024,
         };
-        let req = Request::builder()
-            .uri("/test")
-            .header(CONTENT_LENGTH, "500")
-            .body(Body::empty())
-            .unwrap();
+        let req = Request::builder().uri("/test").header(CONTENT_LENGTH, "500").body(Body::empty()).unwrap();
 
         let res = service.ready().await.unwrap().call(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);

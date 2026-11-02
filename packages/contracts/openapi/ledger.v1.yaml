@@ -1,0 +1,347 @@
+openapi: 3.1.0
+info:
+  title: CEX Ledger Service API
+  version: 1.0.0
+  description: Account balances, settlement calculations, and bank-to-exchange transaction history.
+
+paths:
+  /api/v1/ledger/balances:
+    get:
+      summary: Get all asset balances for authenticated user
+      operationId: getBalances
+      parameters:
+        - $ref: '#/components/parameters/HeaderUserId'
+      responses:
+        '200':
+          description: List of account balances per asset
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AccountBalance'
+        '401':
+          description: Unauthorized
+
+  /api/v1/ledger/balances/{asset}:
+    get:
+      summary: Get balance for a specific currency/token
+      operationId: getBalanceByAsset
+      parameters:
+        - name: asset
+          in: path
+          required: true
+          schema:
+            type: string
+            example: "USDT"
+        - $ref: '#/components/parameters/HeaderUserId'
+      responses:
+        '200':
+          description: Asset balance details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountBalance'
+        '401':
+          description: Unauthorized
+        '404':
+          description: Asset balance not initialized
+
+  /api/v1/ledger/settlement/estimate:
+    post:
+      summary: Estimate settlement/withdrawal calculation and fees
+      operationId: estimateSettlement
+      parameters:
+        - $ref: '#/components/parameters/HeaderUserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettlementEstimateRequest'
+      responses:
+        '200':
+          description: Calculated settlement breakdown
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettlementEstimateResponse'
+        '400':
+          description: Insufficient funds or invalid calculation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+
+  /api/v1/ledger/settlement/request:
+    post:
+      summary: Submit settlement request (locks funds; handled asynchronously by bank worker)
+      operationId: requestSettlement
+      parameters:
+        - $ref: '#/components/parameters/HeaderUserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettlementExecutionRequest'
+      responses:
+        '202':
+          description: Settlement queued successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettlementTicket'
+        '400':
+          description: Insufficient available balance or invalid bank account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+
+  /api/v1/ledger/transactions:
+    get:
+      summary: Fetch bank-to-exchange transaction history (deposits and withdrawals)
+      operationId: listTransactions
+      parameters:
+        - $ref: '#/components/parameters/HeaderUserId'
+        - name: asset
+          in: query
+          required: false
+          schema:
+            type: string
+            example: "USD"
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [deposit, withdrawal]
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [pending, completed, failed, cancelled]
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Historical fiat/crypto banking transactions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BankingTransaction'
+        '401':
+          description: Unauthorized
+
+components:
+  parameters:
+    HeaderUserId:
+      name: x-user-id
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    AccountBalance:
+      type: object
+      required:
+        - asset
+        - available
+        - reserved
+        - total
+        - updated_at
+      properties:
+        asset:
+          type: string
+          example: "USDT"
+        available:
+          type: string
+          description: Liquid balance available for trading or withdrawal
+          pattern: "^\\d+(\\.\\d+)?$"
+          example: "12500.500000"
+        reserved:
+          type: string
+          description: Balance locked in active orders or pending settlements
+          pattern: "^\\d+(\\.\\d+)?$"
+          example: "2500.000000"
+        total:
+          type: string
+          description: Sum of available and reserved
+          pattern: "^\\d+(\\.\\d+)?$"
+          example: "15000.500000"
+        updated_at:
+          type: integer
+          description: Unix millisecond timestamp
+
+    SettlementEstimateRequest:
+      type: object
+      required:
+        - asset
+        - requested_amount
+      properties:
+        asset:
+          type: string
+          example: "USD"
+        requested_amount:
+          type: string
+          pattern: "^\\d+(\\.\\d+)?$"
+          example: "5000.00"
+
+    SettlementEstimateResponse:
+      type: object
+      required:
+        - asset
+        - requested_amount
+        - fee_amount
+        - net_settlement_amount
+        - available_balance
+      properties:
+        asset:
+          type: string
+          example: "USD"
+        requested_amount:
+          type: string
+          pattern: "^\\d+(\\.\\d+)?$"
+          example: "5000.00"
+        fee_amount:
+          type: string
+          pattern: "^\\d+(\\.\\d+)?$"
+          example: "15.00"
+        net_settlement_amount:
+          type: string
+          pattern: "^\\d+(\\.\\d+)?$"
+          example: "4985.00"
+        available_balance:
+          type: string
+          pattern: "^\\d+(\\.\\d+)?$"
+          example: "12500.50"
+
+    SettlementExecutionRequest:
+      type: object
+      required:
+        - asset
+        - amount
+        - bank_account_id
+      properties:
+        asset:
+          type: string
+          example: "USD"
+        amount:
+          type: string
+          pattern: "^\\d+(\\.\\d+)?$"
+          example: "5000.00"
+        bank_account_id:
+          type: string
+          format: uuid
+          example: "2c18d154-209a-4c28-9844-482200dc8a73"
+
+    SettlementTicket:
+      type: object
+      required:
+        - ticket_id
+        - user_id
+        - asset
+        - gross_amount
+        - fee_amount
+        - net_amount
+        - status
+        - created_at
+      properties:
+        ticket_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        asset:
+          type: string
+        gross_amount:
+          type: string
+          pattern: "^\\d+(\\.\\d+)?$"
+        fee_amount:
+          type: string
+          pattern: "^\\d+(\\.\\d+)?$"
+        net_amount:
+          type: string
+          pattern: "^\\d+(\\.\\d+)?$"
+        status:
+          type: string
+          enum: [queued, processing, completed, failed, rejected]
+          example: "queued"
+        created_at:
+          type: integer
+          description: Unix millisecond timestamp
+
+    BankingTransaction:
+      type: object
+      required:
+        - transaction_id
+        - user_id
+        - type
+        - asset
+        - amount
+        - status
+        - created_at
+      properties:
+        transaction_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [deposit, withdrawal]
+          example: "deposit"
+        asset:
+          type: string
+          example: "USD"
+        amount:
+          type: string
+          pattern: "^\\d+(\\.\\d+)?$"
+          example: "10000.00"
+        status:
+          type: string
+          enum: [pending, completed, failed, cancelled]
+          example: "completed"
+        reference:
+          type: string
+          description: External bank wire reference or TXID
+          example: "WIRE-REF-98124019"
+        created_at:
+          type: integer
+          description: Unix millisecond timestamp
+
+    ErrorResponse:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          example: "INSUFFICIENT_FUNDS"
+        message:
+          type: string
+          example: "Requested amount exceeds available balance."

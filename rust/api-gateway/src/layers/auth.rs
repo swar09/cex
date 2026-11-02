@@ -173,7 +173,7 @@ where
             match state.cache.is_blacklist(claims.jti).await {
                 Ok(true) => return Ok(StatusCode::UNAUTHORIZED.into_response()),
                 Err(_) => return Ok(StatusCode::UNAUTHORIZED.into_response()),
-                Ok(false) => {}
+                Ok(false) => {},
             }
 
             req.headers_mut().remove(AUTHORIZATION);
@@ -181,10 +181,7 @@ where
             if let Ok(val) = HeaderValue::from_str(&claims.sub.to_string()) {
                 req.headers_mut().insert(HeaderName::from_static("x-user-id"), val);
             }
-            let role_str = serde_json::to_string(&claims.role)
-                .unwrap_or_default()
-                .trim_matches('"')
-                .to_string();
+            let role_str = serde_json::to_string(&claims.role).unwrap_or_default().trim_matches('"').to_string();
             if let Ok(val) = HeaderValue::from_str(&role_str) {
                 req.headers_mut().insert(HeaderName::from_static("x-user-role"), val);
             }
@@ -200,15 +197,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use axum::{
-        body::Body,
-        extract::Request,
-        response::Response,
-    };
-    use jsonwebtoken::{EncodingKey, Header, Algorithm, encode, jwk::Jwk};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    use axum::{body::Body, extract::Request, response::Response};
+    use jsonwebtoken::{Algorithm, EncodingKey, Header, encode, jwk::Jwk};
     use tower::ServiceExt;
+
+    use super::*;
     use crate::cache::cache::JwksClient;
 
     #[test]
@@ -246,15 +241,9 @@ mod tests {
             let claims = req.extensions().get::<Claims>().cloned();
             Box::pin(async move {
                 if let Some(c) = claims {
-                    Ok(Response::builder()
-                        .status(StatusCode::OK)
-                        .body(Body::from(c.sub.to_string()))
-                        .unwrap())
+                    Ok(Response::builder().status(StatusCode::OK).body(Body::from(c.sub.to_string())).unwrap())
                 } else {
-                    Ok(Response::builder()
-                        .status(StatusCode::NO_CONTENT)
-                        .body(Body::empty())
-                        .unwrap())
+                    Ok(Response::builder().status(StatusCode::NO_CONTENT).body(Body::empty()).unwrap())
                 }
             })
         }
@@ -285,15 +274,9 @@ mod tests {
         let client = JwksClient::new("https://auth.internal/.well_known/jwks.json".into()).unwrap();
         let cache = Cache::new_in_memory(client);
         let state = Arc::new(AuthState::new(cache));
-        let mut service = AuthService {
-            inner: DummyInner,
-            state,
-        };
+        let mut service = AuthService { inner: DummyInner, state };
 
-        let req = Request::builder()
-            .uri("/api/test")
-            .body(Body::empty())
-            .unwrap();
+        let req = Request::builder().uri("/api/test").body(Body::empty()).unwrap();
 
         let response = service.ready().await.unwrap().call(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
@@ -304,10 +287,7 @@ mod tests {
         let client = JwksClient::new("https://auth.internal/.well_known/jwks.json".into()).unwrap();
         let cache = Cache::new_in_memory(client);
         let state = Arc::new(AuthState::new(cache));
-        let mut service = AuthService {
-            inner: DummyInner,
-            state,
-        };
+        let mut service = AuthService { inner: DummyInner, state };
 
         let req = Request::builder()
             .uri("/api/test")
@@ -324,10 +304,7 @@ mod tests {
         let client = JwksClient::new("https://auth.internal/.well_known/jwks.json".into()).unwrap();
         let cache = Cache::new_in_memory(client);
         let state = Arc::new(AuthState::new(cache));
-        let mut service = AuthService {
-            inner: DummyInner,
-            state,
-        };
+        let mut service = AuthService { inner: DummyInner, state };
 
         let req = Request::builder()
             .uri("/api/test")
@@ -344,10 +321,7 @@ mod tests {
         let client = JwksClient::new("https://auth.internal/.well_known/jwks.json".into()).unwrap();
         let cache = Cache::new_in_memory(client);
         let state = Arc::new(AuthState::new(cache));
-        let mut service = AuthService {
-            inner: DummyInner,
-            state,
-        };
+        let mut service = AuthService { inner: DummyInner, state };
 
         let mut header = Header::new(Algorithm::HS256);
         header.kid = Some("../malformed/path".to_string());
@@ -385,10 +359,7 @@ mod tests {
         cache.set_cooldown(std::time::Duration::from_secs(60));
 
         let state = Arc::new(AuthState::new(cache));
-        let mut service = AuthService {
-            inner: DummyInner,
-            state,
-        };
+        let mut service = AuthService { inner: DummyInner, state };
 
         let mut header = Header::new(Algorithm::HS256);
         header.kid = Some("00000000000000000000000000000000".to_string());
@@ -428,10 +399,7 @@ mod tests {
         cache.replace_local_jwks(vec![("a1b2c3d4e5f60718293a4b5c6d7e8f90".to_string(), jwk)]);
 
         let state = Arc::new(AuthState::new(cache));
-        let mut service = AuthService {
-            inner: DummyInner,
-            state,
-        };
+        let mut service = AuthService { inner: DummyInner, state };
 
         let mut header = Header::new(Algorithm::HS256);
         header.kid = Some("a1b2c3d4e5f60718293a4b5c6d7e8f90".to_string());
@@ -469,10 +437,7 @@ mod tests {
         cache.replace_local_jwks(vec![("a1b2c3d4e5f60718293a4b5c6d7e8f90".to_string(), jwk)]);
 
         let state = Arc::new(AuthState::new(cache));
-        let mut service = AuthService {
-            inner: DummyInner,
-            state,
-        };
+        let mut service = AuthService { inner: DummyInner, state };
 
         let mut header = Header::new(Algorithm::HS256);
         header.kid = Some("a1b2c3d4e5f60718293a4b5c6d7e8f90".to_string());

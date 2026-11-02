@@ -76,9 +76,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use axum::body::Body;
     use tower::ServiceExt;
+
+    use super::*;
 
     #[derive(Clone)]
     struct FastService;

@@ -7,6 +7,13 @@ edition = "2024"
 axum = "0.8.9"
 axum-extra = "0.12.6"
 fastrand = "2.5"
+http-body-util = "0.1"
+hyper-util = { version = "0.1.21", features = [
+    "client-legacy",
+    "http1",
+    "http2",
+    "tokio",
+] }
 jsonwebtoken = { version = "11.1.0", features = ["rust_crypto"] }
 redis = { version = "1.7.0", features = [
     "aio",
@@ -22,5 +29,5 @@ tokio = { version = "1.54.0", features = ["rt-multi-thread", "tracing"] }
 toml = "0.8"
 tower = "0.5.3"
 tracing = "0.1"
-uuid = { version = "1.28.0", features = ["serde", "v4"] }
+uuid = { version = "1.28.0", features = ["serde", "v4", "v7"] }
 validator = { version = "0.21.0", features = ["derive"] }

@@ -1,0 +1,19 @@
+{
+  "name": "@cex/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "codegen": "bunx openapi-zod-client openapi/auth.v1.yaml -o src/generated/auth.ts --export-schemas && bunx openapi-zod-client openapi/user.v1.yaml -o src/generated/user.ts --export-schemas && bunx openapi-zod-client openapi/kyc.v1.yaml -o src/generated/kyc.ts --export-schemas && bunx openapi-zod-client openapi/ledger.v1.yaml -o src/generated/ledger.ts --export-schemas && bunx openapi-zod-client openapi/orders.v1.yaml -o src/generated/orders.ts --export-schemas",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@zodios/core": "^10.9.6",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}

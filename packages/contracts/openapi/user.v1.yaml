@@ -1,0 +1,180 @@
+openapi: 3.1.0
+info:
+  title: CEX User Service API
+  version: 1.0.0
+  description: Profile management, identity attributes, and trader role assignment (Retail, Market Maker, Partner).
+
+paths:
+  /api/v1/user/me:
+    get:
+      summary: Get authenticated user profile
+      operationId: getMyProfile
+      parameters:
+        - $ref: '#/components/parameters/HeaderUserId'
+      responses:
+        '200':
+          description: User profile details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '401':
+          description: Unauthorized
+        '404':
+          description: User not found
+
+    put:
+      summary: Update user profile
+      operationId: updateMyProfile
+      parameters:
+        - $ref: '#/components/parameters/HeaderUserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProfileRequest'
+      responses:
+        '200':
+          description: Profile updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '400':
+          description: Invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+
+    delete:
+      summary: Deactivate authenticated user account
+      operationId: deleteMyProfile
+      parameters:
+        - $ref: '#/components/parameters/HeaderUserId'
+      responses:
+        '200':
+          description: Account marked as deactivated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Unauthorized
+
+  /api/v1/user/{user_id}:
+    get:
+      summary: Internal service endpoint to fetch user details by ID
+      operationId: getUserById
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/HeaderUserId'
+        - $ref: '#/components/parameters/HeaderUserRole'
+      responses:
+        '200':
+          description: User record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        '403':
+          description: Forbidden (requires admin or internal role)
+        '404':
+          description: User not found
+
+components:
+  parameters:
+    HeaderUserId:
+      name: x-user-id
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+    HeaderUserRole:
+      name: x-user-role
+      in: header
+      required: true
+      schema:
+        type: string
+        enum: [retail_trader, market_maker, market_taker, partner, admin]
+
+  schemas:
+    UserProfile:
+      type: object
+      required:
+        - id
+        - email
+        - role
+        - kyc_status
+        - status
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "4b684cb3-0098-4c6e-884e-d67b2d28f091"
+        email:
+          type: string
+          format: email
+          example: "trader@example.com"
+        role:
+          type: string
+          enum: [retail_trader, market_maker, market_taker, partner, admin]
+          example: "retail_trader"
+        kyc_status:
+          type: string
+          enum: [unverified, pending, verified, rejected]
+          example: "verified"
+        status:
+          type: string
+          enum: [active, suspended, deactivated]
+          example: "active"
+        display_name:
+          type: string
+          nullable: true
+          example: "Satoshi99"
+        created_at:
+          type: integer
+          description: Unix millisecond timestamp
+          example: 1730570000000
+
+    UpdateProfileRequest:
+      type: object
+      properties:
+        display_name:
+          type: string
+          maxLength: 50
+        preferences:
+          type: object
+          additionalProperties: true
+
+    SuccessResponse:
+      type: object
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+          example: true
+
+    ErrorResponse:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          example: "USER_NOT_FOUND"
+        message:
+          type: string
+          example: "No account exists with the specified identifier."

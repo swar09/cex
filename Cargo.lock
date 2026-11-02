@@ -77,6 +77,8 @@ dependencies = [
  "axum",
  "axum-extra",
  "fastrand",
+ "http-body-util",
+ "hyper-util",
  "jsonwebtoken",
  "redis",
  "regex",

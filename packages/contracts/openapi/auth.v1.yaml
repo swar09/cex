@@ -1,0 +1,342 @@
+openapi: 3.1.0
+info:
+  title: CEX Authorization Service API
+  version: 1.0.0
+  description: Authentication, session management, OAuth2, password lifecycle, and JWKS public key distribution.
+
+paths:
+  /api/v1/auth/signup:
+    post:
+      summary: Register a new account
+      operationId: signup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignupRequest'
+      responses:
+        '201':
+          description: User registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Invalid input or password complexity failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Email already registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/auth/login:
+    post:
+      summary: Authenticate with email and password
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/auth/logout:
+    post:
+      summary: Terminate session and blacklist current JWT token
+      operationId: logout
+      parameters:
+        - $ref: '#/components/parameters/HeaderUserId'
+        - $ref: '#/components/parameters/HeaderTokenId'
+      responses:
+        '200':
+          description: Session terminated and token blacklisted in Redis
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '401':
+          description: Unauthorized
+
+  /api/v1/auth/oauth/google:
+    get:
+      summary: Initiate Google OAuth2 login redirect
+      operationId: oauthGoogle
+      responses:
+        '302':
+          description: Redirect to Google consent screen
+          headers:
+            Location:
+              schema:
+                type: string
+                format: uri
+
+  /api/v1/auth/oauth/google/callback:
+    get:
+      summary: OAuth2 callback from Google
+      operationId: oauthGoogleCallback
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OAuth2 exchange completed, tokens minted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Invalid state or exchange failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/auth/password/update:
+    post:
+      summary: Change password for authenticated user
+      operationId: updatePassword
+      parameters:
+        - $ref: '#/components/parameters/HeaderUserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePasswordRequest'
+      responses:
+        '200':
+          description: Password updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Weak password or invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Invalid current password or unauthorized
+
+  /api/v1/auth/password/verify:
+    post:
+      summary: Verify password for sensitive step-up actions (e.g. withdrawal)
+      operationId: verifyPassword
+      parameters:
+        - $ref: '#/components/parameters/HeaderUserId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyPasswordRequest'
+      responses:
+        '200':
+          description: Password verified
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - verified
+                properties:
+                  verified:
+                    type: boolean
+                    example: true
+        '401':
+          description: Password verification failed
+
+  /.well_known/jwks.json:
+    get:
+      summary: Public JWKS keyset for token signature verification
+      operationId: getJwks
+      responses:
+        '200':
+          description: Active public JWKS keyset
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JwksResponse'
+
+components:
+  parameters:
+    HeaderUserId:
+      name: x-user-id
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+    HeaderTokenId:
+      name: x-token-id
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+    HeaderUserRole:
+      name: x-user-role
+      in: header
+      required: true
+      schema:
+        type: string
+        enum: [retail_trader, market_maker, market_taker, partner, admin]
+
+  schemas:
+    SignupRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+          example: "trader@example.com"
+        password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 128
+        referral_code:
+          type: string
+          example: "REF123"
+
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+          example: "trader@example.com"
+        password:
+          type: string
+          format: password
+
+    UpdatePasswordRequest:
+      type: object
+      required:
+        - current_password
+        - new_password
+      properties:
+        current_password:
+          type: string
+          format: password
+        new_password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 128
+
+    VerifyPasswordRequest:
+      type: object
+      required:
+        - password
+      properties:
+        password:
+          type: string
+          format: password
+
+    AuthResponse:
+      type: object
+      required:
+        - access_token
+        - token_type
+        - expires_in
+        - user_id
+      properties:
+        access_token:
+          type: string
+          description: Signed JWT
+        token_type:
+          type: string
+          example: "Bearer"
+        expires_in:
+          type: integer
+          description: Expiry in seconds
+          example: 3600
+        user_id:
+          type: string
+          format: uuid
+
+    SuccessResponse:
+      type: object
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+          example: true
+
+    ErrorResponse:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          example: "INVALID_CREDENTIALS"
+        message:
+          type: string
+          example: "The email or password provided is incorrect."
+
+    JwksResponse:
+      type: object
+      required:
+        - keys
+      properties:
+        keys:
+          type: array
+          items:
+            type: object
+            required:
+              - kty
+              - kid
+              - alg
+            properties:
+              kty:
+                type: string
+                example: "oct"
+              kid:
+                type: string
+                description: 32-character lowercase hex thumbprint
+                pattern: "^[0-9a-f]{32}$"
+                example: "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+              alg:
+                type: string
+                example: "HS256"
+              k:
+                type: string
+                description: Base64url encoded key material
