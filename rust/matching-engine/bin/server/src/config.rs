@@ -1,6 +1,7 @@
 use std::{path::PathBuf, time::Duration};
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ServerConfig {
     pub bind_addr: String,
     pub ws_broadcast_capacity: usize,

@@ -22,8 +22,12 @@ impl TimeoutLayer {
 
 impl Default for TimeoutLayer {
     fn default() -> Self {
+        let secs = std::env::var("REQUEST_TIMEOUT_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(DEFAULT_TIMEOUT_SECS);
         Self {
-            timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+            timeout: Duration::from_secs(secs),
         }
     }
 }

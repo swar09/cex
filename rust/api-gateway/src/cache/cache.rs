@@ -164,16 +164,24 @@ impl Cache {
             return Ok(jwk);
         }
 
-        if self.is_cooldown_active() {
-            return Err(CacheError::CooldownActive);
+        {
+            let mut guard = match self.cooldown_until.write() {
+                Ok(g) => g,
+                Err(_) => return Err(CacheError::CooldownActive),
+            };
+            if let Some(until) = *guard
+                && Instant::now() < until
+            {
+                return Err(CacheError::CooldownActive);
+            }
+            let cooldown = Self::calculate_jitter_cooldown();
+            *guard = Some(Instant::now() + cooldown);
         }
 
         self.refill_jwks().await?;
 
-        let cooldown = Self::calculate_jitter_cooldown();
-        self.set_cooldown(cooldown);
-
         if let Some(jwk) = self.get_local_jwk(kid) {
+            self.clear_cooldown();
             Ok(jwk)
         } else {
             Err(CacheError::NotFound(kid.to_string()))
@@ -216,6 +224,7 @@ impl JwksClient {
     pub fn new(jwks_endpoint: String) -> Result<Self, JwksClientError> {
         let client = HttpClient::builder()
             .timeout(Duration::from_secs(5))
+            .no_proxy()
             .build()
             .map_err(JwksClientError::ClientBuild)?;
         let this = Self { client, jwks_endpoint };

@@ -71,11 +71,7 @@ where
 
     *req.uri_mut() = target_uri;
 
-    if let Some(host_val) = req
-        .uri()
-        .authority()
-        .and_then(|a| HeaderValue::from_str(a.as_str()).ok())
-    {
+    if let Some(host_val) = req.uri().authority().and_then(|a| HeaderValue::from_str(a.as_str()).ok()) {
         req.headers_mut().insert(HOST, host_val);
     }
 

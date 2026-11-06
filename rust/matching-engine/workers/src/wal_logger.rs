@@ -546,15 +546,15 @@ mod tests {
 
         let mut writer = WalWriter::new(config).expect("create writer ok");
 
-        assert_eq!(writer.flush_periodic(false).unwrap(), false);
+        assert!(!writer.flush_periodic(false).unwrap());
 
         writer.append(&sample_order_placed(1, 10)).unwrap();
         assert!(writer.unflushed_bytes() > 0);
 
-        assert_eq!(writer.flush_periodic(false).unwrap(), false);
+        assert!(!writer.flush_periodic(false).unwrap());
         assert!(writer.unflushed_bytes() > 0);
 
-        assert_eq!(writer.flush_periodic(true).unwrap(), true);
+        assert!(writer.flush_periodic(true).unwrap());
         assert_eq!(writer.unflushed_bytes(), 0);
     }
 

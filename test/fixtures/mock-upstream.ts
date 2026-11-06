@@ -6,6 +6,9 @@ export interface MockUpstreamServer {
   port: number;
   close: () => Promise<void>;
   getLastReceivedRequest: () => EchoPayload | null;
+  getJwksRequestCount: () => number;
+  resetJwksRequestCount: () => void;
+  setResponseDelayMs: (ms: number) => void;
 }
 
 export interface EchoPayload {
@@ -18,9 +21,12 @@ export interface EchoPayload {
 export function startMockUpstream(): Promise<MockUpstreamServer> {
   return new Promise((resolve, reject) => {
     let lastRequest: EchoPayload | null = null;
+    let jwksCount = 0;
+    let responseDelayMs = 0;
 
     const server = http.createServer((req, res) => {
       if (req.url === "/.well_known/jwks.json" && req.method === "GET") {
+        jwksCount++;
         const jwks = getTestJwks();
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify(jwks));
@@ -38,8 +44,16 @@ export function startMockUpstream(): Promise<MockUpstreamServer> {
           body,
         };
 
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify(lastRequest));
+        const execute = () => {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify(lastRequest));
+        };
+
+        if (responseDelayMs > 0) {
+          setTimeout(execute, responseDelayMs);
+        } else {
+          execute();
+        }
       });
     });
 
@@ -57,6 +71,13 @@ export function startMockUpstream(): Promise<MockUpstreamServer> {
         url,
         port,
         getLastReceivedRequest: () => lastRequest,
+        getJwksRequestCount: () => jwksCount,
+        resetJwksRequestCount: () => {
+          jwksCount = 0;
+        },
+        setResponseDelayMs: (ms: number) => {
+          responseDelayMs = ms;
+        },
         close: () =>
           new Promise((done, err) => {
             server.close((e) => (e ? err(e) : done()));

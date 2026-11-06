@@ -7,7 +7,17 @@ use tower::Service;
 fn is_whitelisted_header(name: &HeaderName) -> bool {
     matches!(
         name.as_str(),
-        "authorization" | "content-type" | "content-length" | "accept" | "accept-encoding" | "user-agent" | "host" | "origin" | "x-request-id"
+        "authorization"
+            | "content-type"
+            | "content-length"
+            | "accept"
+            | "accept-encoding"
+            | "user-agent"
+            | "host"
+            | "origin"
+            | "x-request-id"
+            | "access-control-request-method"
+            | "access-control-request-headers"
     )
 }
 
@@ -197,7 +207,7 @@ mod tests {
             .header("sec-fetch-dest", "empty")
             .header("sec-fetch-mode", "cors")
             .header("sec-fetch-site", "same-origin")
-            .header("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+            .header("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa01234567-01")
             .header("tracestate", "congo=t61rcWkgMzE")
             .header("x-b3-traceid", "463ac35c9f6413ad48485a3953bb6124")
             .header("x-b3-spanid", "a2fb4a1d1a96d312")
@@ -234,11 +244,13 @@ mod tests {
             .header("host", "api.cex.com")
             .header("origin", "https://cex.com")
             .header("x-request-id", "018f45a0-d790-7cb8-9b80-60b7713d2a58")
+            .header("access-control-request-method", "POST")
+            .header("access-control-request-headers", "authorization,content-type")
             .body(Body::empty())
             .unwrap();
 
         let res = service.ready().await.unwrap().call(req).await.unwrap();
-        assert_eq!(res.headers().len(), 9);
+        assert_eq!(res.headers().len(), 11);
         assert_eq!(res.headers().get("authorization").unwrap(), "Bearer valid-token");
         assert_eq!(res.headers().get("content-type").unwrap(), "application/json");
         assert_eq!(res.headers().get("content-length").unwrap(), "128");
@@ -248,5 +260,7 @@ mod tests {
         assert_eq!(res.headers().get("host").unwrap(), "api.cex.com");
         assert_eq!(res.headers().get("origin").unwrap(), "https://cex.com");
         assert_eq!(res.headers().get("x-request-id").unwrap(), "018f45a0-d790-7cb8-9b80-60b7713d2a58");
+        assert_eq!(res.headers().get("access-control-request-method").unwrap(), "POST");
+        assert_eq!(res.headers().get("access-control-request-headers").unwrap(), "authorization,content-type");
     }
 }

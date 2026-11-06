@@ -1,10 +1,15 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use axum::{
     Router,
+    http::{
+        HeaderName, Method,
+        header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, ORIGIN},
+    },
     response::{IntoResponse, Response},
-    routing::{any, get, post},
+    routing::{any, get},
 };
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::{
     config::ServicesConfig,
@@ -32,18 +37,45 @@ impl ProxyRouteProvider for RouterState {
 pub fn build_router(state: Arc<RouterState>) -> Router {
     let auth_layer = AuthLayer::new(state.auth.clone());
 
-    let public_routes = Router::new()
-        .route("/healthz", get(health_handler))
-        .route("/api/v1/auth/login", post(reverse_proxy_handler::<RouterState>))
-        .route("/api/v1/auth/register", post(reverse_proxy_handler::<RouterState>));
+    let cors_layer = CorsLayer::new()
+        .allow_origin(AllowOrigin::mirror_request())
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE, Method::OPTIONS])
+        .allow_headers([AUTHORIZATION, CONTENT_TYPE, ACCEPT, ORIGIN, HeaderName::from_static("x-request-id")])
+        .allow_credentials(true)
+        .max_age(Duration::from_secs(86400));
 
-    let protected_routes = Router::new()
-        .route("/api/v1/orders/{*path}", any(reverse_proxy_handler::<RouterState>))
-        .route("/api/v1/engine/{*path}", any(reverse_proxy_handler::<RouterState>))
-        .route("/api/v1/ledger/{*path}", any(reverse_proxy_handler::<RouterState>))
-        .route("/api/v1/user/{*path}", any(reverse_proxy_handler::<RouterState>))
-        .route("/api/v1/kyc/{*path}", any(reverse_proxy_handler::<RouterState>))
-        .layer(auth_layer);
+    let auth_public_paths = [
+        "/api/v1/auth/signup",
+        "/api/v1/auth/register",
+        "/api/v1/auth/login",
+        "/api/v1/auth/oauth/google",
+        "/api/v1/auth/oauth/google/callback",
+    ];
+
+    let auth_protected_paths = ["/api/v1/auth/logout", "/api/v1/auth/password/update", "/api/v1/auth/password/verify"];
+
+    let service_prefixes = ["/api/v1/orders", "/api/v1/engine", "/api/v1/ledger", "/api/v1/user", "/api/v1/kyc"];
+
+    let proxy_any = any(reverse_proxy_handler::<RouterState>);
+
+    let mut public_routes = Router::new()
+        .route("/healthz", get(health_handler))
+        .route("/.well_known/jwks.json", proxy_any.clone());
+
+    for path in auth_public_paths {
+        public_routes = public_routes.route(path, proxy_any.clone());
+    }
+
+    let mut protected_routes = Router::new();
+    for path in auth_protected_paths {
+        protected_routes = protected_routes.route(path, proxy_any.clone());
+    }
+    for prefix in service_prefixes {
+        protected_routes = protected_routes
+            .route(prefix, proxy_any.clone())
+            .route(&format!("{prefix}/{{*path}}"), proxy_any.clone());
+    }
+    let protected_routes = protected_routes.layer(auth_layer);
 
     Router::new()
         .merge(public_routes)
@@ -52,6 +84,7 @@ pub fn build_router(state: Arc<RouterState>) -> Router {
         .layer(ContentLengthLimitLayer::default())
         .layer(TimeoutLayer::default())
         .layer(TraceLayer)
+        .layer(cors_layer)
         .with_state(state)
 }
 
@@ -371,5 +404,44 @@ mod tests {
 
         let res = router.oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+    }
+
+    #[tokio::test]
+    async fn test_cors_preflight_options_request_returns_success_and_headers() {
+        let (state, _, _) = test_router_state(None);
+        let router = build_router(state);
+
+        let req = Request::builder()
+            .method("OPTIONS")
+            .uri("/api/v1/orders/active")
+            .header("origin", "https://app.cex.io")
+            .header("access-control-request-method", "POST")
+            .header("access-control-request-headers", "authorization,content-type")
+            .body(Body::empty())
+            .unwrap();
+
+        let res = router.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.headers().get("access-control-allow-origin").unwrap(), "https://app.cex.io");
+        assert_eq!(res.headers().get("access-control-allow-credentials").unwrap(), "true");
+        assert!(res.headers().contains_key("access-control-allow-methods"));
+        assert!(res.headers().contains_key("access-control-allow-headers"));
+    }
+
+    #[tokio::test]
+    async fn test_cors_simple_request_returns_allow_origin_header() {
+        let (state, _, _) = test_router_state(None);
+        let router = build_router(state);
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/healthz")
+            .header("origin", "https://app.cex.io")
+            .body(Body::empty())
+            .unwrap();
+
+        let res = router.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.headers().get("access-control-allow-origin").unwrap(), "https://app.cex.io");
     }
 }

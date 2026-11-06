@@ -9,6 +9,7 @@ use workers::{
 
 use crate::{config::ServerConfig, pipeline::Pipelines};
 
+#[allow(dead_code)]
 pub struct WorkerHandles {
     pub ws_publisher: thread::JoinHandle<()>,
     pub kafka_logger: thread::JoinHandle<()>,
@@ -63,9 +64,9 @@ fn pin_if_enabled(enabled: bool, core_id: usize) {
     if !enabled {
         return;
     }
-    if let Some(cores) = core_affinity::get_core_ids() {
-        if let Some(core) = cores.get(core_id) {
-            core_affinity::set_for_current(*core);
-        }
+    if let Some(cores) = core_affinity::get_core_ids()
+        && let Some(core) = cores.get(core_id)
+    {
+        core_affinity::set_for_current(*core);
     }
 }

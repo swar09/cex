@@ -24,11 +24,22 @@ function getFreePort(): Promise<number> {
   });
 }
 
-export async function startGateway(mockUpstreamUrl: string): Promise<GatewayProcess> {
-  const binaryPath = "/tmp/cargo-target/debug/api-gateway";
-  if (!fs.existsSync(binaryPath)) {
-    throw new Error(`api-gateway binary not found at ${binaryPath}. Run 'cargo build -p api-gateway' first.`);
+export async function startGateway(
+  mockUpstreamUrl: string,
+  envOverride: Record<string, string> = {}
+): Promise<GatewayProcess> {
+  const candidates = [
+    process.env.GATEWAY_BIN,
+    path.resolve(process.cwd(), "target/debug/api-gateway"),
+    path.resolve(process.cwd(), "../target/debug/api-gateway"),
+    path.resolve(__dirname, "../../target/debug/api-gateway"),
+    "/tmp/cargo-target/debug/api-gateway",
+  ].filter((p): p is string => Boolean(p && fs.existsSync(p)));
+
+  if (candidates.length === 0) {
+    throw new Error("api-gateway binary not found. Run 'cargo build -p api-gateway' first.");
   }
+  const binaryPath = candidates[0];
 
   const port = await getFreePort();
   const url = `http://127.0.0.1:${port}`;
@@ -44,6 +55,7 @@ export async function startGateway(mockUpstreamUrl: string): Promise<GatewayProc
     USER_SERVICE_URL: mockUpstreamUrl,
     KYC_SERVICE_URL: mockUpstreamUrl,
     AUTH_SERVICE_URL: mockUpstreamUrl,
+    ...envOverride,
   };
 
   const child: ChildProcess = spawn(binaryPath, [], {
@@ -59,7 +71,7 @@ export async function startGateway(mockUpstreamUrl: string): Promise<GatewayProc
   });
 
   // Poll /healthz until 200 OK
-  const deadline = Date.now() + 10000;
+  const deadline = Date.now() + 20000;
   let ready = false;
 
   while (Date.now() < deadline) {

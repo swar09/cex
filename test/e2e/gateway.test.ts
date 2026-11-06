@@ -4,7 +4,7 @@ import { startMockUpstream, type MockUpstreamServer } from "../fixtures/mock-ups
 import { createTestJwt, TEST_KID } from "../fixtures/jwt.js";
 import { startGateway, type GatewayProcess } from "../helpers/gateway-process.js";
 
-describe("API Gateway E2E Test Suite", () => {
+describe("gateway e2e", () => {
   let mockServer: MockUpstreamServer;
   let gateway: GatewayProcess;
 
@@ -18,8 +18,8 @@ describe("API Gateway E2E Test Suite", () => {
     await mockServer?.close();
   });
 
-  describe("Public Routes & Request Tracing", () => {
-    it("returns 200 OK and mints a valid UUIDv7 request ID", async () => {
+  describe("tracing", () => {
+    it("returns 200 and mints uuidv7 request id", async () => {
       const res = await fetch(`${gateway.url}/healthz`);
       expect(res.status).toBe(200);
       expect(await res.text()).toBe("OK");
@@ -27,12 +27,11 @@ describe("API Gateway E2E Test Suite", () => {
       const requestId = res.headers.get("x-request-id");
       expect(requestId).toBeTruthy();
 
-      // UUIDv7 format validation: 8-4-4-4-12 with '7' as the version digit
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
       expect(requestId).toMatch(uuidRegex);
     });
 
-    it("discards incoming client x-request-id and overwrites with minted UUIDv7", async () => {
+    it("overwrites incoming client request id with minted uuidv7", async () => {
       const spoofedId = "11111111-1111-1111-1111-111111111111";
       const res = await fetch(`${gateway.url}/healthz`, {
         headers: {
@@ -47,8 +46,8 @@ describe("API Gateway E2E Test Suite", () => {
     });
   });
 
-  describe("Authentication & Identity Protection", () => {
-    it("rejects unauthenticated requests to protected endpoints with 401", async () => {
+  describe("auth", () => {
+    it("rejects unauthenticated requests to protected endpoints", async () => {
       const res = await fetch(`${gateway.url}/api/v1/orders/create`, {
         method: "POST",
         body: JSON.stringify({ symbol: "BTC/USDT" }),
@@ -58,7 +57,7 @@ describe("API Gateway E2E Test Suite", () => {
       expect(res.headers.get("x-request-id")).toBeTruthy();
     });
 
-    it("rejects requests with malformed tokens or invalid prefixes with 401", async () => {
+    it("rejects malformed token strings", async () => {
       const res = await fetch(`${gateway.url}/api/v1/orders/create`, {
         method: "POST",
         headers: {
@@ -69,7 +68,7 @@ describe("API Gateway E2E Test Suite", () => {
       expect(res.status).toBe(401);
     });
 
-    it("rejects tokens with non-32-char hex kid format before JWKS lookup", async () => {
+    it("rejects token with non-32-char hex kid format", async () => {
       const invalidKidToken = createTestJwt({}, "invalid-short-kid");
       const res = await fetch(`${gateway.url}/api/v1/orders/create`, {
         method: "POST",
@@ -81,9 +80,9 @@ describe("API Gateway E2E Test Suite", () => {
       expect(res.status).toBe(401);
     });
 
-    it("rejects expired tokens with 401", async () => {
+    it("rejects expired token", async () => {
       const expiredToken = createTestJwt({
-        exp: Math.floor(Date.now() / 1000) - 3600, // expired 1 hour ago (past leeway)
+        exp: Math.floor(Date.now() / 1000) - 3600,
       });
 
       const res = await fetch(`${gateway.url}/api/v1/orders/create`, {
@@ -97,8 +96,8 @@ describe("API Gateway E2E Test Suite", () => {
     });
   });
 
-  describe("Header Sanitization & Authentic Claims Injection", () => {
-    it("purges malicious spoof headers, strips authorization, and injects authentic token claims", async () => {
+  describe("sanitization", () => {
+    it("purges spoofed headers and injects authentic token claims", async () => {
       const userId = "4b684cb3-0098-4c6e-884e-d67b2d28f091";
       const tokenId = "7c8234bb-6681-4f9e-a035-7cfa85fba331";
 
@@ -137,15 +136,12 @@ describe("API Gateway E2E Test Suite", () => {
       expect(upstream).not.toBeNull();
       if (!upstream) return;
 
-      // 1. Path and query parameters preserved
       expect(upstream.url).toBe("/api/v1/orders/create?mode=immediate");
 
-      // 2. Verified authentic claims injected by gateway
       expect(upstream.headers["x-user-id"]).toBe(userId);
       expect(upstream.headers["x-user-role"]).toBe("client");
       expect(upstream.headers["x-token-id"]).toBe(tokenId);
 
-      // 3. Sensitive & proxy headers stripped
       expect(upstream.headers["authorization"]).toBeUndefined();
       expect(upstream.headers["x-forwarded-for"]).toBeUndefined();
       expect(upstream.headers["x-custom-header"]).toBeUndefined();
@@ -153,23 +149,21 @@ describe("API Gateway E2E Test Suite", () => {
       expect(upstream.headers["if-none-match"]).toBeUndefined();
       expect(upstream.headers["cache-control"]).toBeUndefined();
 
-      // 4. Whitelisted headers preserved
       expect(upstream.headers["content-type"]).toBe("application/json");
 
-      // 5. Zero-copy body integrity
       expect(upstream.body).toBe(orderPayload);
     });
   });
 
-  describe("Reverse Proxy & Payload Limits", () => {
-    it("enforces 10MB payload limit (returns 413 Payload Too Large)", async () => {
+  describe("proxy limits", () => {
+    it("returns 413 when payload exceeds 10mb limit", async () => {
       const statusCode = await new Promise<number>((resolve, reject) => {
         const req = http.request(
           `${gateway.url}/healthz`,
           {
             method: "POST",
             headers: {
-              "content-length": "20000000", // 20 MB > 10 MB limit
+              "content-length": "20000000",
             },
           },
           (res) => resolve(res.statusCode || 0)
@@ -181,7 +175,7 @@ describe("API Gateway E2E Test Suite", () => {
       expect(statusCode).toBe(413);
     });
 
-    it("forwards zero-copy streaming payloads transparently", async () => {
+    it("forwards streaming payloads transparently", async () => {
       const validToken = createTestJwt();
       const largePayload = JSON.stringify({
         items: Array.from({ length: 500 }, (_, i) => ({

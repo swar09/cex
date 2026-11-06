@@ -28,6 +28,7 @@ thiserror = "2.0.21"
 tokio = { version = "1.54.0", features = ["rt-multi-thread", "tracing"] }
 toml = "0.8"
 tower = "0.5.3"
+tower-http = { version = "0.6.2", features = ["cors"] }
 tracing = "0.1"
 uuid = { version = "1.28.0", features = ["serde", "v4", "v7"] }
 validator = { version = "0.21.0", features = ["derive"] }

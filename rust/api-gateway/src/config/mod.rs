@@ -253,9 +253,7 @@ impl GatewayConfig {
         if let Ok(host) = std::env::var("SERVER_HOST") {
             self.server.host = host;
         }
-        if let Ok(port) = std::env::var("SERVER_PORT")
-            .and_then(|p| p.parse().map_err(|_| std::env::VarError::NotPresent))
-        {
+        if let Ok(port) = std::env::var("SERVER_PORT").and_then(|p| p.parse().map_err(|_| std::env::VarError::NotPresent)) {
             self.server.port = port;
         }
         if let Ok(jwks) = std::env::var("GLOBAL_JWKS_ENDPOINT") {
@@ -283,6 +281,12 @@ impl GatewayConfig {
         }
         if let Ok(auth) = std::env::var("AUTH_SERVICE_URL") {
             self.services.auth = auth;
+        }
+        if let Ok(timeout) = std::env::var("REQUEST_TIMEOUT_SECS").and_then(|t| t.parse().map_err(|_| std::env::VarError::NotPresent)) {
+            self.limits.request_timeout_secs = timeout;
+        }
+        if let Ok(limit) = std::env::var("MAX_CONTENT_LENGTH_BYTES").and_then(|l| l.parse().map_err(|_| std::env::VarError::NotPresent)) {
+            self.limits.max_content_length_bytes = limit;
         }
     }
 

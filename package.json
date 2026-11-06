@@ -6,6 +6,13 @@
     "packages/*",
     "workers/*"
   ],
+  "scripts": {
+    "test": "./scripts/test.sh",
+    "test:unit": "./scripts/test.sh --unit",
+    "test:contract": "./scripts/test.sh --contract",
+    "test:integration": "./scripts/test.sh --integration",
+    "test:e2e": "./scripts/test.sh --e2e"
+  },
   "module": "index.ts",
   "type": "module",
   "devDependencies": {
