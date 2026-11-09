@@ -3,7 +3,7 @@ use std::sync::Arc;
 use api_gateway::{
     cache::cache::{Cache, JwksClient},
     config::GatewayConfig,
-    layers::AuthState,
+    layers::{AuthState, AutonomousLimiter, DistributedLimiter, RateLimiter, RateLimiterEngine, RedisCoordinator},
     proxy::ProxyClient,
     routing::{RouterState, build_router},
 };
@@ -31,13 +31,38 @@ async fn main() {
         },
     };
 
-    let auth_state = Arc::new(AuthState::new(cache));
+    let rate_limiter = if config.rate_limiter.enabled {
+        match RedisCoordinator::new(&config.rate_limiter.redis_url, config.rate_limiter.key_prefix.clone()).await {
+            Ok(coordinator) => {
+                let lease_duration = std::time::Duration::from_secs(config.rate_limiter.lease_duration_secs);
+                let batch_window = std::time::Duration::from_micros(config.rate_limiter.batch_window_micros);
+                let distributed = DistributedLimiter::new(Arc::new(coordinator), lease_duration, batch_window);
+                Some(Arc::new(RateLimiter::new(
+                    Arc::new(config.rate_limiter.clone()),
+                    RateLimiterEngine::Distributed(distributed),
+                )))
+            },
+            Err(e) => {
+                eprintln!("[gateway] rate limiter redis connection failed, falling back to autonomous mode: {e}");
+                Some(Arc::new(RateLimiter::new(
+                    Arc::new(config.rate_limiter.clone()),
+                    RateLimiterEngine::Autonomous(AutonomousLimiter::new()),
+                )))
+            },
+        }
+    } else {
+        None
+    };
+
+    let auth_state = Arc::new(AuthState::from_config(cache, &config.jwt_cache));
     let proxy_client = Arc::new(ProxyClient::new());
     let services_config = Arc::new(config.services);
     let router_state = Arc::new(RouterState {
         auth: auth_state,
         proxy: proxy_client,
         services: services_config,
+        rate_limiter,
+        load_balancer: None,
     });
     let app = build_router(router_state);
 

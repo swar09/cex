@@ -1,6 +1,6 @@
-use std::{fs, path::Path};
+use std::{collections::HashMap, fs, path::Path};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 const DEFAULT_HOST: &str = "0.0.0.0";
@@ -17,6 +17,15 @@ const DEFAULT_LEDGER_URL: &str = "http://ledger-service:8083";
 const DEFAULT_USER_URL: &str = "http://user-service:8084";
 const DEFAULT_KYC_URL: &str = "http://kyc-service:8085";
 const DEFAULT_AUTH_URL: &str = "http://auth-service:8086";
+const DEFAULT_RATE_LIMIT_ENABLED: bool = false;
+const DEFAULT_RATE_LIMIT_REDIS_URL: &str = "redis://127.0.0.1:16379";
+const DEFAULT_RATE_LIMIT_KEY_PREFIX: &str = "rl";
+const DEFAULT_RATE_LIMIT_LEASE_DURATION_SECS: u64 = 5;
+const DEFAULT_RATE_LIMIT_BATCH_WINDOW_MICROS: u64 = 2000;
+pub const DEFAULT_JWT_CACHE_ENABLED: bool = true;
+pub const DEFAULT_JWT_CACHE_TTL_SECS: u64 = 15;
+pub const DEFAULT_JWT_CACHE_MAX_ENTRIES_PER_SHARD: usize = 5000;
+pub const DEFAULT_JWT_CACHE_SWEEP_INTERVAL_MS: u64 = 200;
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -37,7 +46,7 @@ pub enum ConfigError {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq, Default)]
-pub struct GatewayConfig {
+pub struct ApiGatewayConfig {
     #[serde(default)]
     pub server: ServerConfig,
     #[serde(default)]
@@ -48,7 +57,13 @@ pub struct GatewayConfig {
     pub limits: LimitsConfig,
     #[serde(default)]
     pub services: ServicesConfig,
+    #[serde(default)]
+    pub rate_limiter: RateLimiterConfig,
+    #[serde(default)]
+    pub jwt_cache: JwtCacheConfig,
 }
+
+pub type GatewayConfig = ApiGatewayConfig;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct ServerConfig {
@@ -79,18 +94,69 @@ fn default_port() -> u16 {
 pub struct AuthConfig {
     #[serde(default = "default_jwks_endpoint")]
     pub jwks_endpoint: String,
+    #[serde(default)]
+    pub jwt_cache: Option<JwtCacheConfig>,
 }
 
 impl Default for AuthConfig {
     fn default() -> Self {
         Self {
             jwks_endpoint: default_jwks_endpoint(),
+            jwt_cache: None,
         }
     }
 }
 
 fn default_jwks_endpoint() -> String {
     DEFAULT_JWKS_ENDPOINT.to_string()
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct JwtCacheConfig {
+    #[serde(default = "default_jwt_cache_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_jwt_cache_ttl_secs")]
+    pub ttl_secs: u64,
+    #[serde(default = "default_jwt_cache_max_entries_per_shard")]
+    pub max_entries_per_shard: usize,
+    #[serde(default = "default_jwt_cache_sweep_interval_ms")]
+    pub sweep_interval_ms: u64,
+}
+
+impl Default for JwtCacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_jwt_cache_enabled(),
+            ttl_secs: default_jwt_cache_ttl_secs(),
+            max_entries_per_shard: default_jwt_cache_max_entries_per_shard(),
+            sweep_interval_ms: default_jwt_cache_sweep_interval_ms(),
+        }
+    }
+}
+
+fn default_jwt_cache_enabled() -> bool {
+    DEFAULT_JWT_CACHE_ENABLED
+}
+
+fn default_jwt_cache_ttl_secs() -> u64 {
+    std::env::var("JWT_CACHE_TTL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_JWT_CACHE_TTL_SECS)
+}
+
+fn default_jwt_cache_max_entries_per_shard() -> usize {
+    std::env::var("JWT_CACHE_MAX_ENTRIES_PER_SHARD")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_JWT_CACHE_MAX_ENTRIES_PER_SHARD)
+}
+
+fn default_jwt_cache_sweep_interval_ms() -> u64 {
+    std::env::var("JWT_CACHE_SWEEP_INTERVAL_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_JWT_CACHE_SWEEP_INTERVAL_MS)
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -221,6 +287,190 @@ fn default_auth_url() -> String {
     std::env::var("AUTH_SERVICE_URL").unwrap_or_else(|_| DEFAULT_AUTH_URL.to_string())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Tier {
+    Tier1,
+    Tier2,
+    Tier3,
+    #[default]
+    Tier4,
+}
+
+impl Tier {
+    #[inline]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Tier1 => "tier1",
+            Self::Tier2 => "tier2",
+            Self::Tier3 => "tier3",
+            Self::Tier4 => "tier4",
+        }
+    }
+}
+
+impl std::str::FromStr for Tier {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "tier1" => Ok(Self::Tier1),
+            "tier2" => Ok(Self::Tier2),
+            "tier3" => Ok(Self::Tier3),
+            _ => Ok(Self::Tier4),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct TierLimitConfig {
+    pub initial_tokens: u64,
+    pub fill_rate: u64,
+    pub burst_interval_secs: u64,
+    pub max_tokens: u64,
+    pub lease_batch_size: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct TiersConfig {
+    #[serde(default = "default_tier1_config")]
+    pub tier1: TierLimitConfig,
+    #[serde(default = "default_tier2_config")]
+    pub tier2: TierLimitConfig,
+    #[serde(default = "default_tier3_config")]
+    pub tier3: TierLimitConfig,
+    #[serde(default = "default_tier4_config")]
+    pub tier4: TierLimitConfig,
+}
+
+impl Default for TiersConfig {
+    fn default() -> Self {
+        Self {
+            tier1: default_tier1_config(),
+            tier2: default_tier2_config(),
+            tier3: default_tier3_config(),
+            tier4: default_tier4_config(),
+        }
+    }
+}
+
+impl TiersConfig {
+    #[inline]
+    pub fn get(&self, tier: Tier) -> &TierLimitConfig {
+        match tier {
+            Tier::Tier1 => &self.tier1,
+            Tier::Tier2 => &self.tier2,
+            Tier::Tier3 => &self.tier3,
+            Tier::Tier4 => &self.tier4,
+        }
+    }
+}
+
+pub fn default_tier1_config() -> TierLimitConfig {
+    TierLimitConfig {
+        initial_tokens: 1000,
+        fill_rate: 1000,
+        burst_interval_secs: 60,
+        max_tokens: 5000,
+        lease_batch_size: 500,
+    }
+}
+
+pub fn default_tier2_config() -> TierLimitConfig {
+    TierLimitConfig {
+        initial_tokens: 200,
+        fill_rate: 200,
+        burst_interval_secs: 60,
+        max_tokens: 1000,
+        lease_batch_size: 100,
+    }
+}
+
+pub fn default_tier3_config() -> TierLimitConfig {
+    TierLimitConfig {
+        initial_tokens: 50,
+        fill_rate: 50,
+        burst_interval_secs: 60,
+        max_tokens: 250,
+        lease_batch_size: 50,
+    }
+}
+
+pub fn default_tier4_config() -> TierLimitConfig {
+    TierLimitConfig {
+        initial_tokens: 10,
+        fill_rate: 10,
+        burst_interval_secs: 60,
+        max_tokens: 50,
+        lease_batch_size: 10,
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct RateLimiterConfig {
+    #[serde(default = "default_rate_limit_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_rate_limit_redis_url")]
+    pub redis_url: String,
+    #[serde(default = "default_rate_limit_key_prefix")]
+    pub key_prefix: String,
+    #[serde(default = "default_rate_limit_lease_duration_secs")]
+    pub lease_duration_secs: u64,
+    #[serde(default = "default_rate_limit_batch_window_micros")]
+    pub batch_window_micros: u64,
+    #[serde(default)]
+    pub default_tier: Tier,
+    #[serde(default)]
+    pub tiers: TiersConfig,
+    #[serde(default = "default_role_mapping")]
+    pub role_mapping: HashMap<String, Tier>,
+}
+
+impl Default for RateLimiterConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_rate_limit_enabled(),
+            redis_url: default_rate_limit_redis_url(),
+            key_prefix: default_rate_limit_key_prefix(),
+            lease_duration_secs: default_rate_limit_lease_duration_secs(),
+            batch_window_micros: default_rate_limit_batch_window_micros(),
+            default_tier: Tier::Tier4,
+            tiers: TiersConfig::default(),
+            role_mapping: default_role_mapping(),
+        }
+    }
+}
+
+fn default_rate_limit_enabled() -> bool {
+    DEFAULT_RATE_LIMIT_ENABLED
+}
+
+fn default_rate_limit_redis_url() -> String {
+    std::env::var("RATE_LIMIT_REDIS_URL").unwrap_or_else(|_| DEFAULT_RATE_LIMIT_REDIS_URL.to_string())
+}
+
+fn default_rate_limit_key_prefix() -> String {
+    DEFAULT_RATE_LIMIT_KEY_PREFIX.to_string()
+}
+
+fn default_rate_limit_lease_duration_secs() -> u64 {
+    DEFAULT_RATE_LIMIT_LEASE_DURATION_SECS
+}
+
+fn default_rate_limit_batch_window_micros() -> u64 {
+    DEFAULT_RATE_LIMIT_BATCH_WINDOW_MICROS
+}
+
+fn default_role_mapping() -> HashMap<String, Tier> {
+    let mut mapping = HashMap::new();
+    mapping.insert("admin".to_string(), Tier::Tier1);
+    mapping.insert("partner".to_string(), Tier::Tier1);
+    mapping.insert("bot".to_string(), Tier::Tier2);
+    mapping.insert("client".to_string(), Tier::Tier3);
+    mapping.insert("default".to_string(), Tier::Tier4);
+    mapping
+}
+
 impl GatewayConfig {
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, ConfigError> {
         let path_ref = path.as_ref();
@@ -229,7 +479,10 @@ impl GatewayConfig {
             path: path_str.clone(),
             source: e,
         })?;
-        let config: GatewayConfig = toml::from_str(&content).map_err(|e| ConfigError::Parse { path: path_str, source: e })?;
+        let mut config: GatewayConfig = toml::from_str(&content).map_err(|e| ConfigError::Parse { path: path_str, source: e })?;
+        if let Some(sub_jwt_cache) = config.auth.jwt_cache.take() {
+            config.jwt_cache = sub_jwt_cache;
+        }
         Ok(config)
     }
 
@@ -288,6 +541,34 @@ impl GatewayConfig {
         if let Ok(limit) = std::env::var("MAX_CONTENT_LENGTH_BYTES").and_then(|l| l.parse().map_err(|_| std::env::VarError::NotPresent)) {
             self.limits.max_content_length_bytes = limit;
         }
+        if let Ok(enabled) = std::env::var("RATE_LIMIT_ENABLED").and_then(|v| v.parse().map_err(|_| std::env::VarError::NotPresent)) {
+            self.rate_limiter.enabled = enabled;
+        }
+        if let Ok(redis_url) = std::env::var("RATE_LIMIT_REDIS_URL") {
+            self.rate_limiter.redis_url = redis_url;
+        }
+        if let Ok(batch_window) = std::env::var("RATE_LIMIT_BATCH_WINDOW_MICROS").and_then(|v| v.parse().map_err(|_| std::env::VarError::NotPresent))
+        {
+            self.rate_limiter.batch_window_micros = batch_window;
+        }
+        if let Ok(lease_duration) =
+            std::env::var("RATE_LIMIT_LEASE_DURATION_SECS").and_then(|v| v.parse().map_err(|_| std::env::VarError::NotPresent))
+        {
+            self.rate_limiter.lease_duration_secs = lease_duration;
+        }
+        if let Ok(enabled) = std::env::var("JWT_CACHE_ENABLED").and_then(|v| v.parse().map_err(|_| std::env::VarError::NotPresent)) {
+            self.jwt_cache.enabled = enabled;
+        }
+        if let Ok(ttl) = std::env::var("JWT_CACHE_TTL_SECS").and_then(|v| v.parse().map_err(|_| std::env::VarError::NotPresent)) {
+            self.jwt_cache.ttl_secs = ttl;
+        }
+        if let Ok(max_entries) = std::env::var("JWT_CACHE_MAX_ENTRIES_PER_SHARD").and_then(|v| v.parse().map_err(|_| std::env::VarError::NotPresent))
+        {
+            self.jwt_cache.max_entries_per_shard = max_entries;
+        }
+        if let Ok(sweep_ms) = std::env::var("JWT_CACHE_SWEEP_INTERVAL_MS").and_then(|v| v.parse().map_err(|_| std::env::VarError::NotPresent)) {
+            self.jwt_cache.sweep_interval_ms = sweep_ms;
+        }
     }
 
     pub fn load_or_default() -> Self {
@@ -311,6 +592,14 @@ impl GatewayConfig {
             std::env::set_var("USER_SERVICE_URL", &self.services.user);
             std::env::set_var("KYC_SERVICE_URL", &self.services.kyc);
             std::env::set_var("AUTH_SERVICE_URL", &self.services.auth);
+            std::env::set_var("RATE_LIMIT_ENABLED", self.rate_limiter.enabled.to_string());
+            std::env::set_var("RATE_LIMIT_REDIS_URL", &self.rate_limiter.redis_url);
+            std::env::set_var("RATE_LIMIT_LEASE_DURATION_SECS", self.rate_limiter.lease_duration_secs.to_string());
+            std::env::set_var("RATE_LIMIT_BATCH_WINDOW_MICROS", self.rate_limiter.batch_window_micros.to_string());
+            std::env::set_var("JWT_CACHE_ENABLED", self.jwt_cache.enabled.to_string());
+            std::env::set_var("JWT_CACHE_TTL_SECS", self.jwt_cache.ttl_secs.to_string());
+            std::env::set_var("JWT_CACHE_MAX_ENTRIES_PER_SHARD", self.jwt_cache.max_entries_per_shard.to_string());
+            std::env::set_var("JWT_CACHE_SWEEP_INTERVAL_MS", self.jwt_cache.sweep_interval_ms.to_string());
         }
     }
 }
@@ -345,6 +634,11 @@ mod tests {
             user = "http://user-test:8084"
             kyc = "http://kyc-test:8085"
             auth = "http://auth-test:8086"
+
+            [rate_limiter]
+            enabled = true
+            batch_window_micros = 250
+            lease_duration_secs = 10
         "#;
 
         let config: GatewayConfig = toml::from_str(toml_str).unwrap();
@@ -362,6 +656,9 @@ mod tests {
         assert_eq!(config.services.user, "http://user-test:8084");
         assert_eq!(config.services.kyc, "http://kyc-test:8085");
         assert_eq!(config.services.auth, "http://auth-test:8086");
+        assert!(config.rate_limiter.enabled);
+        assert_eq!(config.rate_limiter.batch_window_micros, 250);
+        assert_eq!(config.rate_limiter.lease_duration_secs, 10);
     }
 
     #[test]
@@ -378,6 +675,10 @@ mod tests {
         assert_eq!(config.services.user, DEFAULT_USER_URL);
         assert_eq!(config.services.kyc, DEFAULT_KYC_URL);
         assert_eq!(config.services.auth, DEFAULT_AUTH_URL);
+        assert_eq!(config.jwt_cache.enabled, DEFAULT_JWT_CACHE_ENABLED);
+        assert_eq!(config.jwt_cache.ttl_secs, DEFAULT_JWT_CACHE_TTL_SECS);
+        assert_eq!(config.jwt_cache.max_entries_per_shard, DEFAULT_JWT_CACHE_MAX_ENTRIES_PER_SHARD);
+        assert_eq!(config.jwt_cache.sweep_interval_ms, DEFAULT_JWT_CACHE_SWEEP_INTERVAL_MS);
     }
 
     #[test]
@@ -394,7 +695,7 @@ mod tests {
 
     #[test]
     fn test_apply_to_env_populates_vars() {
-        let _guard = crate::TEST_ENV_LOCK.lock().unwrap();
+        let _guard = crate::TEST_ENV_LOCK.lock();
         let config = GatewayConfig {
             server: ServerConfig {
                 host: "10.0.0.1".into(),
@@ -402,12 +703,15 @@ mod tests {
             },
             auth: AuthConfig {
                 jwks_endpoint: "https://auth.internal/.well_known/jwks.json".into(),
+                jwt_cache: None,
             },
             redis: RedisConfig {
                 url: "redis://10.0.0.2:6379".into(),
             },
             limits: LimitsConfig::default(),
             services: ServicesConfig::default(),
+            rate_limiter: RateLimiterConfig::default(),
+            jwt_cache: JwtCacheConfig::default(),
         };
 
         config.apply_to_env();
@@ -420,5 +724,72 @@ mod tests {
             "https://auth.internal/.well_known/jwks.json"
         );
         assert_eq!(std::env::var("ORDER_SERVICE_URL").unwrap(), DEFAULT_ORDERS_URL);
+        assert_eq!(std::env::var("RATE_LIMIT_BATCH_WINDOW_MICROS").unwrap(), "2000");
+        assert_eq!(std::env::var("RATE_LIMIT_LEASE_DURATION_SECS").unwrap(), "5");
+        assert_eq!(std::env::var("JWT_CACHE_ENABLED").unwrap(), "true");
+        assert_eq!(std::env::var("JWT_CACHE_TTL_SECS").unwrap(), "15");
+        assert_eq!(std::env::var("JWT_CACHE_MAX_ENTRIES_PER_SHARD").unwrap(), "5000");
+        assert_eq!(std::env::var("JWT_CACHE_SWEEP_INTERVAL_MS").unwrap(), "200");
+    }
+
+    #[test]
+    fn test_parse_jwt_cache_config() {
+        let toml_str = r#"
+            [jwt_cache]
+            enabled = false
+            ttl_secs = 60
+            max_entries_per_shard = 10000
+            sweep_interval_ms = 500
+        "#;
+        let config: GatewayConfig = toml::from_str(toml_str).unwrap();
+        assert!(!config.jwt_cache.enabled);
+        assert_eq!(config.jwt_cache.ttl_secs, 60);
+        assert_eq!(config.jwt_cache.max_entries_per_shard, 10000);
+        assert_eq!(config.jwt_cache.sweep_interval_ms, 500);
+    }
+
+    #[test]
+    fn test_parse_auth_jwt_cache_nested() {
+        let toml_str = r#"
+            [auth.jwt_cache]
+            enabled = true
+            ttl_secs = 45
+            max_entries_per_shard = 2000
+            sweep_interval_ms = 100
+        "#;
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("test_config_{}.toml", fastrand::u64(..)));
+        std::fs::write(&path, toml_str).unwrap();
+        let config = GatewayConfig::from_file(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        assert!(config.jwt_cache.enabled);
+        assert_eq!(config.jwt_cache.ttl_secs, 45);
+        assert_eq!(config.jwt_cache.max_entries_per_shard, 2000);
+        assert_eq!(config.jwt_cache.sweep_interval_ms, 100);
+    }
+
+    #[test]
+    fn test_jwt_cache_env_overrides() {
+        let _guard = crate::TEST_ENV_LOCK.lock();
+        unsafe {
+            std::env::set_var("JWT_CACHE_ENABLED", "false");
+            std::env::set_var("JWT_CACHE_TTL_SECS", "30");
+            std::env::set_var("JWT_CACHE_MAX_ENTRIES_PER_SHARD", "8000");
+            std::env::set_var("JWT_CACHE_SWEEP_INTERVAL_MS", "400");
+        }
+        let mut config = GatewayConfig::default();
+        config.apply_env_overrides();
+        assert!(!config.jwt_cache.enabled);
+        assert_eq!(config.jwt_cache.ttl_secs, 30);
+        assert_eq!(config.jwt_cache.max_entries_per_shard, 8000);
+        assert_eq!(config.jwt_cache.sweep_interval_ms, 400);
+
+        unsafe {
+            std::env::remove_var("JWT_CACHE_ENABLED");
+            std::env::remove_var("JWT_CACHE_TTL_SECS");
+            std::env::remove_var("JWT_CACHE_MAX_ENTRIES_PER_SHARD");
+            std::env::remove_var("JWT_CACHE_SWEEP_INTERVAL_MS");
+        }
     }
 }

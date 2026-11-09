@@ -3,11 +3,18 @@ name = "api-gateway"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "api-gateway"
+path = "src/main.rs"
+
 [dependencies]
+arc-swap = "1.9.4"
 axum = "0.8.9"
 axum-extra = "0.12.6"
 fastrand = "2.5"
+fxhash = "0.2.1"
 http-body-util = "0.1"
+parking_lot = "0.12"
 hyper-util = { version = "0.1.21", features = [
     "client-legacy",
     "http1",

@@ -13,7 +13,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::{
     config::ServicesConfig,
-    layers::{AuthLayer, AuthState, ContentLengthLimitLayer, HeaderSanitizeLayer, TimeoutLayer, TraceLayer},
+    layers::{AuthLayer, AuthState, ContentLengthLimitLayer, HeaderSanitizeLayer, RateLimitLayer, RateLimiter, TimeoutLayer, TraceLayer},
     proxy::{ProxyClient, ProxyRouteProvider, reverse_proxy_handler},
 };
 
@@ -22,6 +22,8 @@ pub struct RouterState {
     pub auth: Arc<AuthState>,
     pub proxy: Arc<ProxyClient>,
     pub services: Arc<ServicesConfig>,
+    pub rate_limiter: Option<Arc<RateLimiter>>,
+    pub load_balancer: Option<crate::load_balancer::LoadBalancerRegistry>,
 }
 
 impl ProxyRouteProvider for RouterState {
@@ -75,11 +77,32 @@ pub fn build_router(state: Arc<RouterState>) -> Router {
             .route(prefix, proxy_any.clone())
             .route(&format!("{prefix}/{{*path}}"), proxy_any.clone());
     }
+    let lb_layer = state
+        .load_balancer
+        .as_ref()
+        .map(|lb| crate::load_balancer::LoadBalancerLayer::new(lb.clone()));
+
+    let public_routes = if let Some(ref lb) = lb_layer {
+        public_routes.layer(lb.clone())
+    } else {
+        public_routes
+    };
+
+    let protected_routes = if let Some(ref lb) = lb_layer {
+        protected_routes.layer(lb.clone())
+    } else {
+        protected_routes
+    };
+    let protected_routes = if let Some(ref limiter) = state.rate_limiter {
+        protected_routes.layer(RateLimitLayer::new(limiter.clone()))
+    } else {
+        protected_routes
+    };
     let protected_routes = protected_routes.layer(auth_layer);
 
-    Router::new()
-        .merge(public_routes)
-        .merge(protected_routes)
+    let router = Router::new().merge(public_routes).merge(protected_routes);
+
+    router
         .layer(HeaderSanitizeLayer)
         .layer(ContentLengthLimitLayer::default())
         .layer(TimeoutLayer::default())
@@ -95,6 +118,7 @@ async fn health_handler() -> Response {
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::HashMap,
         str::FromStr,
         time::{SystemTime, UNIX_EPOCH},
     };
@@ -174,6 +198,8 @@ mod tests {
             auth,
             proxy,
             services: Arc::new(services),
+            rate_limiter: None,
+            load_balancer: None,
         });
         (state, jwk, encoding_key)
     }
@@ -443,5 +469,167 @@ mod tests {
         let res = router.oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
         assert_eq!(res.headers().get("access-control-allow-origin").unwrap(), "https://app.cex.io");
+    }
+
+    #[tokio::test]
+    async fn test_protected_endpoint_rate_limited_returns_429() {
+        let (mock_url, _tx) = spawn_mock_upstream().await;
+        let (state, _, encoding_key) = test_router_state(Some(mock_url));
+
+        let user_id = Uuid::new_v4();
+        let tiers = crate::config::TiersConfig {
+            tier3: crate::config::TierLimitConfig {
+                initial_tokens: 0,
+                fill_rate: 0,
+                burst_interval_secs: 30,
+                max_tokens: 250,
+                lease_batch_size: 10,
+            },
+            ..Default::default()
+        };
+
+        let mut role_mapping = HashMap::new();
+        role_mapping.insert("client".to_string(), crate::config::Tier::Tier3);
+
+        let limiter = Arc::new(RateLimiter::new(
+            Arc::new(crate::config::RateLimiterConfig {
+                enabled: true,
+                redis_url: "redis://127.0.0.1:16379".into(),
+                key_prefix: "rl".into(),
+                lease_duration_secs: 5,
+                batch_window_micros: 100,
+                default_tier: crate::config::Tier::Tier4,
+                tiers,
+                role_mapping,
+            }),
+            crate::layers::RateLimiterEngine::Autonomous(crate::layers::AutonomousLimiter::new()),
+        ));
+
+        let state = Arc::new(RouterState {
+            auth: state.auth.clone(),
+            proxy: state.proxy.clone(),
+            services: state.services.clone(),
+            rate_limiter: Some(limiter),
+            load_balancer: None,
+        });
+
+        let router = build_router(state);
+
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let claims = Claims {
+            iss: "https://auth.internal".to_string(),
+            sub: user_id,
+            iat: now,
+            nbf: now,
+            exp: now + 3600,
+            aud: Audience::Order,
+            role: UserRole::Client,
+            jti: Uuid::new_v4(),
+        };
+
+        let mut header = Header::new(Algorithm::HS256);
+        header.kid = Some("a1b2c3d4e5f60718293a4b5c6d7e8f90".to_string());
+        let token = encode(&header, &claims, &encoding_key).unwrap();
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/orders/123")
+            .header(AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+
+        let res = router.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(res.headers().get("retry-after").unwrap(), "30");
+        assert_eq!(res.headers().get("x-ratelimit-remaining").unwrap(), "0");
+    }
+
+    #[tokio::test]
+    async fn test_router_with_load_balancer_routes_to_backend() {
+        let (mock_url, _shutdown) = spawn_mock_upstream().await;
+        let (state, _, encoding_key) = test_router_state(None);
+        let addr = mock_url.trim_start_matches("http://").parse::<std::net::SocketAddr>().unwrap();
+        let lb_config = crate::load_balancer::LoadBalancerConfig {
+            service_name: "orders".to_string(),
+            algorithm: crate::load_balancer::AlgorithmType::RoundRobin,
+            health_check: crate::load_balancer::HealthCheckConfig::default(),
+            circuit_breaker: crate::load_balancer::CircuitBreakerConfig::default(),
+            initial_endpoints: vec![addr],
+        };
+        let lb = Arc::new(crate::load_balancer::LoadBalancer::new(lb_config).unwrap());
+        let mut services = std::collections::HashMap::new();
+        services.insert("orders".to_string(), lb);
+        let registry = crate::load_balancer::LoadBalancerRegistry::new(services);
+
+        let state = Arc::new(RouterState {
+            auth: state.auth.clone(),
+            proxy: state.proxy.clone(),
+            services: state.services.clone(),
+            rate_limiter: None,
+            load_balancer: Some(registry),
+        });
+
+        let router = build_router(state);
+
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let claims = Claims {
+            iss: "https://auth.internal".to_string(),
+            sub: Uuid::new_v4(),
+            iat: now,
+            nbf: now,
+            exp: now + 3600,
+            aud: Audience::Order,
+            role: UserRole::Client,
+            jti: Uuid::new_v4(),
+        };
+
+        let mut header = Header::new(Algorithm::HS256);
+        header.kid = Some("a1b2c3d4e5f60718293a4b5c6d7e8f90".to_string());
+        let token = encode(&header, &claims, &encoding_key).unwrap();
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/api/v1/orders/123")
+            .header(AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+
+        let res = router.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_router_unauthenticated_request_rejected_before_load_balancer() {
+        let (state, _, _) = test_router_state(None);
+        // Create an LB for orders with 0 endpoints (which would yield 503 if
+        // invoked)
+        let lb_config = crate::load_balancer::LoadBalancerConfig {
+            service_name: "orders".to_string(),
+            algorithm: crate::load_balancer::AlgorithmType::RoundRobin,
+            health_check: crate::load_balancer::HealthCheckConfig::default(),
+            circuit_breaker: crate::load_balancer::CircuitBreakerConfig::default(),
+            initial_endpoints: vec![],
+        };
+        let lb = Arc::new(crate::load_balancer::LoadBalancer::new(lb_config).unwrap());
+        let mut services = std::collections::HashMap::new();
+        services.insert("orders".to_string(), lb);
+        let registry = crate::load_balancer::LoadBalancerRegistry::new(services);
+
+        let state = Arc::new(RouterState {
+            auth: state.auth.clone(),
+            proxy: state.proxy.clone(),
+            services: state.services.clone(),
+            rate_limiter: None,
+            load_balancer: Some(registry),
+        });
+
+        let router = build_router(state);
+
+        let req = Request::builder().method("GET").uri("/api/v1/orders/123").body(Body::empty()).unwrap();
+
+        let res = router.oneshot(req).await.unwrap();
+        // Since AuthLayer runs before LoadBalancerLayer, it must reject with
+        // 401, not 503!
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     }
 }

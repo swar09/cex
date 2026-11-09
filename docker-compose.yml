@@ -66,5 +66,13 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  redis-rate-limiter:
+    build:
+      context: ./infra/redis-rate-limiter
+    container_name: cex-redis-rate-limiter
+    ports:
+      - "16379:6379"
+    restart: unless-stopped
+
 volumes:
   redis-data:

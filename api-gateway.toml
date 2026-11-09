@@ -7,6 +7,12 @@ port = 8080
 [auth]
 jwks_endpoint = "https://auth.internal/.well_known/jwks.json"
 
+[jwt_cache]
+enabled = true
+ttl_secs = 15
+max_entries_per_shard = 5000
+sweep_interval_ms = 200
+
 [redis]
 url = "redis://127.0.0.1:6379"
 
@@ -23,3 +29,46 @@ ledger = "http://ledger-service:8083"
 user = "http://user-service:8084"
 kyc = "http://kyc-service:8085"
 auth = "http://auth-service:8086"
+
+[rate_limiter]
+enabled = false
+redis_url = "redis://127.0.0.1:16379"
+key_prefix = "rl"
+lease_duration_secs = 5
+batch_window_micros = 2000
+default_tier = "tier4"
+
+[rate_limiter.tiers.tier1]
+initial_tokens = 1000
+fill_rate = 1000
+burst_interval_secs = 60
+max_tokens = 5000
+lease_batch_size = 500
+
+[rate_limiter.tiers.tier2]
+initial_tokens = 200
+fill_rate = 200
+burst_interval_secs = 60
+max_tokens = 1000
+lease_batch_size = 100
+
+[rate_limiter.tiers.tier3]
+initial_tokens = 50
+fill_rate = 50
+burst_interval_secs = 60
+max_tokens = 250
+lease_batch_size = 50
+
+[rate_limiter.tiers.tier4]
+initial_tokens = 10
+fill_rate = 10
+burst_interval_secs = 60
+max_tokens = 50
+lease_batch_size = 10
+
+[rate_limiter.role_mapping]
+admin = "tier1"
+partner = "tier1"
+bot = "tier2"
+client = "tier3"
+default = "tier4"

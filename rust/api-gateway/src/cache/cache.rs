@@ -1,11 +1,12 @@
 use std::{
     collections::HashMap,
     error::Error,
-    sync::{Arc, LazyLock, RwLock},
+    sync::{Arc, LazyLock},
     time::{Duration, Instant},
 };
 
 use jsonwebtoken::jwk::{Jwk, JwkSet};
+use parking_lot::RwLock;
 use redis::{
     AsyncCommands, Client, SetOptions,
     aio::{ConnectionManager, ConnectionManagerConfig},
@@ -101,38 +102,30 @@ impl Cache {
 
     /// Checks if request cooldown is currently active.
     pub fn is_cooldown_active(&self) -> bool {
-        self.cooldown_until
-            .read()
-            .is_ok_and(|guard| (*guard).is_some_and(|until| Instant::now() < until))
+        self.cooldown_until.read().is_some_and(|until| Instant::now() < until)
     }
 
     /// Sets cooldown timestamp to expire after specified `duration`.
     pub fn set_cooldown(&self, duration: Duration) {
-        if let Ok(mut guard) = self.cooldown_until.write() {
-            *guard = Some(Instant::now() + duration);
-        }
+        let mut guard = self.cooldown_until.write();
+        *guard = Some(Instant::now() + duration);
     }
 
-    /// Clears active cooldown immediately.
     pub fn clear_cooldown(&self) {
-        if let Ok(mut guard) = self.cooldown_until.write() {
-            *guard = None;
-        }
+        let mut guard = self.cooldown_until.write();
+        *guard = None;
     }
 
-    /// Retrieves cloned `Jwk` from in-memory cache under shared read lock.
     pub fn get_local_jwk(&self, kid: &str) -> Option<Jwk> {
-        let guard = self.local_cache.read().ok()?;
+        let guard = self.local_cache.read();
         guard.get(kid).cloned()
     }
 
-    /// Empties existing keys in in-memory cache and populates with `jwks`.
     pub fn replace_local_jwks(&self, jwks: Vec<(String, Jwk)>) {
-        if let Ok(mut guard) = self.local_cache.write() {
-            guard.clear();
-            for (kid, jwk) in jwks {
-                guard.insert(kid, jwk);
-            }
+        let mut guard = self.local_cache.write();
+        guard.clear();
+        for (kid, jwk) in jwks {
+            guard.insert(kid, jwk);
         }
     }
 
@@ -165,10 +158,7 @@ impl Cache {
         }
 
         {
-            let mut guard = match self.cooldown_until.write() {
-                Ok(g) => g,
-                Err(_) => return Err(CacheError::CooldownActive),
-            };
+            let mut guard = self.cooldown_until.write();
             if let Some(until) = *guard
                 && Instant::now() < until
             {
@@ -284,7 +274,7 @@ mod tests {
 
     #[test]
     fn test_env_fallback_to_default() {
-        let _guard = crate::TEST_ENV_LOCK.lock().unwrap();
+        let _guard = crate::TEST_ENV_LOCK.lock();
         // Ensure no env vars set for test isolation
         unsafe {
             std::env::remove_var("GLOBAL_JWKS_ENDPOINT");
@@ -296,7 +286,7 @@ mod tests {
 
     #[test]
     fn test_env_resolution_precedence() {
-        let _guard = crate::TEST_ENV_LOCK.lock().unwrap();
+        let _guard = crate::TEST_ENV_LOCK.lock();
         unsafe {
             std::env::set_var("GLOBAL_JWKS_ENDPOINT", "https://global.internal/.well_known/jwks.json");
             std::env::set_var("JWKS_ENDPOINT", "https://local.internal/.well_known/jwks.json");

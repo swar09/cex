@@ -33,3 +33,4 @@ data/
 data/wal/
 *.wal
 .agents/
+benchmarks/

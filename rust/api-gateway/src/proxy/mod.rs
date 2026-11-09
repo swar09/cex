@@ -55,10 +55,16 @@ pub async fn reverse_proxy_handler<T>(State(state): State<Arc<T>>, mut req: Requ
 where
     T: ProxyRouteProvider + 'static,
 {
+    let selected = req.extensions().get::<crate::load_balancer::SelectedBackend>().cloned();
+
     let path = req.uri().path();
-    let upstream_base = match state.services().resolve_upstream(path) {
-        Some(url) => url,
-        None => return StatusCode::NOT_FOUND.into_response(),
+    let upstream_base = if let Some(ref sel) = selected {
+        format!("http://{}", sel.addr)
+    } else {
+        match state.services().resolve_upstream(path) {
+            Some(url) => url.to_string(),
+            None => return StatusCode::NOT_FOUND.into_response(),
+        }
     };
 
     let path_and_query = req.uri().path_and_query().map(|pq| pq.as_str()).unwrap_or(path);
@@ -77,10 +83,20 @@ where
 
     match state.proxy_client().client.request(req).await {
         Ok(upstream_res) => {
+            if let Some(ref sel) = selected {
+                if upstream_res.status().is_server_error() {
+                    sel.backend.mark_transport_failure(3);
+                } else {
+                    sel.backend.mark_transport_success();
+                }
+            }
             let (parts, upstream_body) = upstream_res.into_parts();
             Response::from_parts(parts, Body::new(upstream_body))
         },
         Err(err) => {
+            if let Some(ref sel) = selected {
+                sel.backend.mark_transport_failure(3);
+            }
             tracing::error!(%err, "upstream service unreachable");
             StatusCode::BAD_GATEWAY.into_response()
         },
