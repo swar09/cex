@@ -5,7 +5,6 @@ use std::{path::PathBuf, time::Duration};
 pub struct ServerConfig {
     pub bind_addr: String,
     pub ws_broadcast_capacity: usize,
-    pub redis_auth_url: String,
     pub redis_replica_url: String,
     pub kafka_brokers: String,
     pub kafka_topic: String,
@@ -14,7 +13,6 @@ pub struct ServerConfig {
     pub wal_flush_interval: Duration,
     pub ingress_buffer_size: usize,
     pub egress_buffer_size: usize,
-    pub jwks_url: Option<String>,
     pub pinning_enabled: bool,
     pub core_wal: usize,
     pub core_engine: usize,
@@ -29,7 +27,6 @@ impl ServerConfig {
         Self {
             bind_addr: env_str("GATEWAY_BIND_ADDR", "0.0.0.0:8080"),
             ws_broadcast_capacity: env_usize("WS_BROADCAST_CAPACITY", 4096),
-            redis_auth_url: env_str("REDIS_AUTH_URL", &env_str("REDIS_URL", "redis://127.0.0.1:6379")),
             redis_replica_url: env_str("REDIS_READ_REPLICA_URL", &env_str("REDIS_URL", "redis://127.0.0.1:6379")),
             kafka_brokers: env_str("KAFKA_BROKERS", "127.0.0.1:9092"),
             kafka_topic: env_str("KAFKA_TOPIC", "orderbook.events.logs"),
@@ -38,7 +35,6 @@ impl ServerConfig {
             wal_flush_interval: Duration::from_millis(env_u64("WAL_FLUSH_MS", 5)),
             ingress_buffer_size: env_usize("INGRESS_BUFFER_SIZE", 65536),
             egress_buffer_size: env_usize("EGRESS_BUFFER_SIZE", 65536),
-            jwks_url: std::env::var("JWKS_URL").ok(),
             pinning_enabled: env_bool("PINNING_ENABLED", false),
             core_wal: env_usize("CORE_WAL", 1),
             core_engine: env_usize("CORE_ENGINE", 2),

@@ -11,9 +11,6 @@ pub enum CacheError {
     #[error("Key not found: {0}")]
     NotFound(String),
 
-    #[error("Fetch error: {0}")]
-    FetchError(String),
-
     #[error("Parse integer error: {0}")]
     ParseInt(#[from] std::num::ParseIntError),
 }

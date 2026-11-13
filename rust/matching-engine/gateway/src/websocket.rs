@@ -14,10 +14,10 @@ use futures_util::{
 };
 use tokio::sync::broadcast::{Receiver, Sender};
 
-use crate::{AppState, middleware::AuthUser};
+use crate::{AppState, identity::GatewayIdentity};
 
-pub async fn ws_handler(ws: WebSocketUpgrade, auth_user: AuthUser, State(state): State<AppState>) -> Response {
-    ws.on_upgrade(move |socket| handle(socket, state, auth_user))
+pub async fn ws_handler(ws: WebSocketUpgrade, identity: GatewayIdentity, State(state): State<AppState>) -> Response {
+    ws.on_upgrade(move |socket| handle(socket, state, identity))
 }
 
 pub fn start_ws_broadcaster(mut event_rx: Receiver<Arc<OrderbookEventLog>>, ws_tx: Sender<Message>) -> tokio::task::JoinHandle<()> {
@@ -45,7 +45,7 @@ pub fn start_ws_broadcaster(mut event_rx: Receiver<Arc<OrderbookEventLog>>, ws_t
     })
 }
 
-pub async fn handle(socket: WebSocket, state: AppState, _auth_user: AuthUser) {
+pub async fn handle(socket: WebSocket, state: AppState, _identity: GatewayIdentity) {
     let (sender, receiver) = socket.split();
     let ws_rx = state.ws_tx.subscribe();
 

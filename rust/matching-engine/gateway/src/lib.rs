@@ -8,7 +8,7 @@ use tokio::sync::broadcast::Sender;
 pub mod error;
 pub mod exchange;
 pub mod handlers;
-pub mod middleware;
+pub mod identity;
 pub mod routers;
 pub mod types;
 pub mod websocket;

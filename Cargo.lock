@@ -328,13 +328,10 @@ name = "cache"
 version = "0.1.0"
 dependencies = [
  "domain",
- "jsonwebtoken",
  "redis",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
- "tokio",
- "uuid",
 ]
 
 [[package]]
@@ -953,7 +950,6 @@ dependencies = [
  "domain",
  "engine",
  "futures-util",
- "jsonwebtoken",
  "serde",
  "serde_json",
  "tokio",
@@ -2539,7 +2535,6 @@ dependencies = [
  "env_logger",
  "fxhash",
  "gateway",
- "jsonwebtoken",
  "log",
  "queue",
  "rdkafka",

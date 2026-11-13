@@ -4,7 +4,6 @@ use std::time::Duration;
 
 pub use domain::{ModifyOrder, NewOrder, Order, OrderId, Price, Quantity, Side, Symbol};
 pub use error::CacheError;
-use jsonwebtoken::jwk::Jwk;
 
 pub type ExternalUserId = usize;
 pub type Balance = u64;
@@ -12,239 +11,36 @@ use redis::{
     AsyncCommands, Client, SetOptions,
     aio::{ConnectionManager, ConnectionManagerConfig},
 };
-use uuid::Uuid;
-
-pub const JWKS_DEFAULT_TTL_SEC: u64 = 3600;
 
 #[derive(Clone)]
 pub struct Cache {
-    pub auth_conn: ConnectionManager,
     pub replica_conn: ConnectionManager,
-    pub jwks_url: Option<String>,
 }
 
 impl Cache {
-    pub async fn new(auth_redis_addr: &str, replica_redis_addr: &str, jwks_url: Option<String>) -> Result<Self, CacheError> {
+    pub async fn new(replica_redis_addr: &str) -> Result<Self, CacheError> {
         let config = ConnectionManagerConfig::new()
             .set_connection_timeout(Some(Duration::from_secs(3)))
             .set_response_timeout(Some(Duration::from_secs(2)));
-        let auth_client = Client::open(auth_redis_addr)?;
-        let auth_conn = ConnectionManager::new_with_config(auth_client, config.clone()).await?;
-
-        let replica_client = Client::open(replica_redis_addr)?;
-        let replica_conn = ConnectionManager::new_with_config(replica_client, config).await?;
-
-        let cache = Cache {
-            auth_conn,
-            replica_conn,
-            jwks_url,
-        };
-
-        if cache.jwks_url.is_some()
-            && let Err(e) = cache.load_jwks().await
-        {
-            eprintln!("[cache] warning: startup JWKS load failed (will lazy-load on demand): {e}");
-        }
-
-        Ok(cache)
+        Self::new_with_config(replica_redis_addr, config).await
     }
 
     pub async fn from_env() -> Result<Self, CacheError> {
-        let auth_redis = std::env::var("REDIS_AUTH_URL")
-            .or_else(|_| std::env::var("REDIS_URL"))
-            .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-
         let replica_redis = std::env::var("REDIS_READ_REPLICA_URL")
             .or_else(|_| std::env::var("REDIS_URL"))
             .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
 
-        let jwks_url = std::env::var("AUTH_SERVICE_JWKS_URL").or_else(|_| std::env::var("JWKS_URL")).ok();
-
-        Self::new(&auth_redis, &replica_redis, jwks_url).await
+        Self::new(&replica_redis).await
     }
 
-    pub async fn new_single(redis_addr: &str, jwks_url: Option<String>) -> Result<Self, CacheError> {
-        Self::new(redis_addr, redis_addr, jwks_url).await
-    }
-
-    pub async fn new_with_config(
-        auth_redis_addr: &str,
-        replica_redis_addr: &str,
-        jwks_url: Option<String>,
-        config: ConnectionManagerConfig,
-    ) -> Result<Self, CacheError> {
-        let auth_client = Client::open(auth_redis_addr)?;
-        let auth_conn = ConnectionManager::new_with_config(auth_client, config.clone()).await?;
-
+    pub async fn new_with_config(replica_redis_addr: &str, config: ConnectionManagerConfig) -> Result<Self, CacheError> {
         let replica_client = Client::open(replica_redis_addr)?;
         let replica_conn = ConnectionManager::new_with_config(replica_client, config).await?;
-
-        let cache = Cache {
-            auth_conn,
-            replica_conn,
-            jwks_url,
-        };
-
-        if cache.jwks_url.is_some()
-            && let Err(e) = cache.load_jwks().await
-        {
-            eprintln!("[cache] warning: startup JWKS load failed (will lazy-load on demand): {e}");
-        }
-
-        Ok(cache)
-    }
-
-    pub fn auth_connection(&self) -> ConnectionManager {
-        self.auth_conn.clone()
+        Ok(Cache { replica_conn })
     }
 
     pub fn replica_connection(&self) -> ConnectionManager {
         self.replica_conn.clone()
-    }
-
-    pub async fn fetch_jwks_from_endpoint(url_str: &str) -> Result<jsonwebtoken::jwk::JwkSet, CacheError> {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let stripped = url_str
-            .strip_prefix("http://")
-            .ok_or_else(|| CacheError::FetchError(format!("Unsupported scheme in URL: {url_str}")))?;
-
-        let (host_port, path) = match stripped.find('/') {
-            Some(pos) => (&stripped[..pos], &stripped[pos..]),
-            None => (stripped, "/"),
-        };
-
-        let addr = if host_port.contains(':') {
-            host_port.to_string()
-        } else {
-            format!("{host_port}:80")
-        };
-
-        let mut stream = tokio::net::TcpStream::connect(&addr)
-            .await
-            .map_err(|e| CacheError::FetchError(format!("Failed to connect to {addr}: {e}")))?;
-
-        let request =
-            format!("GET {path} HTTP/1.1\r\nHost: {host_port}\r\nUser-Agent: cex-cache\r\nAccept: application/json\r\nConnection: close\r\n\r\n");
-
-        stream
-            .write_all(request.as_bytes())
-            .await
-            .map_err(|e| CacheError::FetchError(format!("Failed to write HTTP request: {e}")))?;
-
-        let mut response_bytes = Vec::new();
-        stream
-            .read_to_end(&mut response_bytes)
-            .await
-            .map_err(|e| CacheError::FetchError(format!("Failed to read HTTP response: {e}")))?;
-
-        let body_idx = response_bytes
-            .windows(4)
-            .position(|window| window == b"\r\n\r\n")
-            .ok_or_else(|| CacheError::FetchError("Malformed HTTP response: missing header delimiter".to_string()))?
-            + 4;
-
-        let body = &response_bytes[body_idx..];
-
-        if let Ok(jwk_set) = serde_json::from_slice::<jsonwebtoken::jwk::JwkSet>(body) {
-            return Ok(jwk_set);
-        }
-
-        if let Ok(single_jwk) = serde_json::from_slice::<jsonwebtoken::jwk::Jwk>(body) {
-            return Ok(jsonwebtoken::jwk::JwkSet { keys: vec![single_jwk] });
-        }
-
-        Err(CacheError::FetchError(format!("Failed to parse JWKS from {url_str}")))
-    }
-
-    pub async fn load_jwks(&self) -> Result<usize, CacheError> {
-        let Some(ref url) = self.jwks_url else {
-            return Ok(0);
-        };
-
-        let jwk_set = Self::fetch_jwks_from_endpoint(url).await?;
-        let count = jwk_set.keys.len();
-
-        for jwk in &jwk_set.keys {
-            if let Some(ref kid) = jwk.common.key_id {
-                self.set_jwk(kid, jwk, Some(JWKS_DEFAULT_TTL_SEC)).await?;
-            }
-        }
-
-        Ok(count)
-    }
-
-    pub async fn blacklist(&self, jti: Uuid, exp_rsec: u64) -> Result<bool, CacheError> {
-        let mut conn = self.auth_conn.clone();
-        let options = SetOptions::default().with_expiration(redis::SetExpiry::EX(exp_rsec));
-        let key = format!("blacklist:{jti}");
-        let value = format!("{jti}");
-        let result: Option<String> = conn.set_options(key, value, options).await?;
-
-        Ok(result.as_deref() == Some("OK"))
-    }
-
-    pub async fn is_blacklist(&self, jti: Uuid) -> Result<bool, CacheError> {
-        let mut conn = self.auth_conn.clone();
-        let key = format!("blacklist:{jti}");
-        let result: bool = conn.exists(key).await?;
-
-        Ok(result)
-    }
-
-    pub async fn get_jwk(&self, kid: &str) -> Result<Option<Jwk>, CacheError> {
-        let mut conn = self.auth_conn.clone();
-        let key = format!("jwks:{kid}");
-        let data: Option<String> = conn.get(key).await?;
-        match data {
-            Some(json_str) => {
-                let jwk: Jwk = serde_json::from_str(&json_str)?;
-                Ok(Some(jwk))
-            },
-            None => Ok(None),
-        }
-    }
-
-    pub async fn set_jwk(&self, kid: &str, jwk: &Jwk, exp_sec: Option<u64>) -> Result<(), CacheError> {
-        let mut conn = self.auth_conn.clone();
-        let key = format!("jwks:{kid}");
-        let json_str = serde_json::to_string(jwk)?;
-        if let Some(ttl) = exp_sec {
-            let options = SetOptions::default().with_expiration(redis::SetExpiry::EX(ttl));
-            let _: Option<String> = conn.set_options(key, json_str, options).await?;
-        } else {
-            let _: () = conn.set(key, json_str).await?;
-        }
-        Ok(())
-    }
-
-    pub async fn get_or_fetch_jwk(&self, kid: &str) -> Result<Jwk, CacheError> {
-        if let Some(cached) = self.get_jwk(kid).await? {
-            return Ok(cached);
-        }
-
-        if self.jwks_url.is_some() {
-            let _ = self.load_jwks().await?;
-            if let Some(cached) = self.get_jwk(kid).await? {
-                return Ok(cached);
-            }
-        }
-
-        Err(CacheError::NotFound(format!("kid '{kid}' not found in cache or JWKS endpoint")))
-    }
-
-    pub async fn get_or_fetch_jwk_with<F, Fut>(&self, kid: &str, fetch: F, exp_sec: Option<u64>) -> Result<Jwk, CacheError>
-    where
-        F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = Result<Jwk, CacheError>>,
-    {
-        if let Some(cached) = self.get_jwk(kid).await? {
-            return Ok(cached);
-        }
-
-        let fetched = fetch().await?;
-        self.set_jwk(kid, &fetched, exp_sec).await?;
-        Ok(fetched)
     }
 
     pub async fn add_order(&self, order: &Order, exp_sec: u64) -> Result<bool, CacheError> {
@@ -817,9 +613,6 @@ mod tests {
     fn test_cache_error_display_and_variants() {
         let not_found = CacheError::NotFound("test_key".to_string());
         assert_eq!(format!("{not_found}"), "Key not found: test_key");
-
-        let fetch_err = CacheError::FetchError("network down".to_string());
-        assert_eq!(format!("{fetch_err}"), "Fetch error: network down");
 
         let parse_err = "abc".parse::<u64>().unwrap_err();
         let cache_parse_err = CacheError::from(parse_err);
